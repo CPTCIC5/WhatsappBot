@@ -28,10 +28,6 @@ def chat_with_assistant(content):
               "allowed_domains": [
                   "ridra.in"
               ]}
-            },
-            {
-                "type": "file_search",
-                "vector_store_ids": [""]
             }
         ]
     )

@@ -7,11 +7,11 @@ load_dotenv()
 token = os.getenv("ACCESS_TOKEN")
 version = os.getenv("VERSION")
 number_id = os.getenv("PHONE_NUMBER_ID")
-user = os.getenv("USER_NUMBER")
+user = input("Enter the recipient's phone number (with country code, e.g., +1234567890): ")
 
 ############# FOR SENDING MESSAGES MANUALLY #############
 def send_txt_msg():
-    url = f"https://graph.facebook.com/v22.0/{number_id}/messages"
+    url = f"https://graph.facebook.com/v24.0/{number_id}/messages"
 
     headers = {
         "Authorization" : f"Bearer {token}",
