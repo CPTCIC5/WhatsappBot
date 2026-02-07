@@ -67,7 +67,6 @@ async def verify_webhook(request: Request):
         raise HTTPException(status_code=403, detail="Verification token mismatch.")
 
 
-# ✅ Proper app setup
 app = FastAPI()
 
 sqladmin_static_path = os.path.join(os.path.dirname(sqladmin.__file__), "statics")
@@ -79,7 +78,6 @@ for item in os.listdir(sqladmin_static_path):
     else:
         shutil.copy2(src, dest)
 
-# Mount your static directory
 app.mount("/static", StaticFiles(directory="static"), name="static")
 
 media_path = Path("media")
@@ -92,8 +90,10 @@ app.include_router(router)
 from sqladmin import Admin
 admin = Admin(app, engine)
 
-from db.admin import ProductAdmin
+from db.admin import ProductAdmin, MetalAdmin, LeadAdmin
+admin.add_view(MetalAdmin)
 admin.add_view(ProductAdmin)
+admin.add_view(LeadAdmin)
 
 if __name__ == "__main__":
     import uvicorn

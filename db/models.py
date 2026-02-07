@@ -1,5 +1,7 @@
-from sqlalchemy import create_engine, Column, Integer, String, DateTime, Enum
+from sqlalchemy import create_engine, Column, Integer, String, DateTime, JSON, Enum, Float, ForeignKey, Text
 from sqlalchemy.orm import relationship, declarative_base, sessionmaker
+from sqlalchemy.sql import func
+from datetime import datetime
 from dotenv import load_dotenv
 import enum
 
@@ -18,12 +20,41 @@ def get_db():
     finally:
         db.close()
 
+class Metal(Base):
+    __tablename__ = "metals"
+
+    id = Column(Integer, primary_key=True, index=True)
+    metal = Column(String, index=True)  
+    karat = Column(String, index=True)  
+    rate_per_gram = Column(Float)  
+
+    
+    products = relationship("Product", back_populates="metal_info")
+
+    def __repr__(self):
+        return f"{self.metal} - {self.karat}"
+
+
 class Product(Base):
     __tablename__ = "products"
 
     id = Column(Integer, primary_key=True, index=True)
+    style_no = Column(String, index=True)
+    jewel_code = Column(String, index=True)
+    gross_weight = Column(Float)  
     name = Column(String, index=True)
-    description = Column(String)
+    description = Column(Text)
+    metal_id = Column(Integer, ForeignKey("metals.id"))
+
+    
+    metal_info = relationship("Metal", back_populates="products")
+
+    @property
+    def calculated_amount(self):
+        """Calculate the amount based on gross weight and metal rate per gram"""
+        if self.gross_weight and self.metal_info and self.metal_info.rate_per_gram:
+            return round(self.gross_weight * self.metal_info.rate_per_gram, 2)
+        return 0.0
 
     def __repr__(self):
         return self.name
@@ -40,8 +71,53 @@ class Lead(Base):
     tag= Column(Enum("new", "existing", name="lead_tags"))
     email = Column(String, unique=True, index=True)
     phone = Column(String, unique=True, index=True)
-    created_at = Column(DateTime)
+    created_at = Column(DateTime,  default=datetime.utcnow)
 
     def __repr__(self):
         return self.name
     
+
+
+class WhatsAppTemplate(Base):
+    __tablename__ = "whatsapp_templates"
+
+    id = Column(Integer, primary_key=True, index=True)
+
+    template_name = Column(String, unique=True, index=True, nullable=False)
+    language = Column(String, default="en_US", nullable=False)
+
+    category = Column(
+        Enum(
+            "MARKETING",
+            "UTILITY",
+            "AUTHENTICATION",
+            name="whatsapp_template_category"
+        ),
+        nullable=False
+    )
+
+    use_case = Column(String, index=True, nullable=False)
+
+    components_schema = Column(JSON, nullable=False)
+
+    
+    status = Column(
+        Enum(
+            "APPROVED",
+            "PENDING",
+            "REJECTED",
+            name="whatsapp_template_status"
+        ),
+        default="PENDING"
+    )
+
+    meta_template_id = Column(String, nullable=True)
+
+    
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(
+        DateTime,
+        default=datetime.utcnow,
+        onupdate=datetime.utcnow
+    )
+    last_synced_at = Column(DateTime, nullable=True)
