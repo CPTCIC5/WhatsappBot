@@ -82,3 +82,7 @@ def chat_with_assistant(content):
         ]
     )
     return resp.output_text
+
+
+x1= input("Enter the content: ")
+print(chat_with_assistant(x1))
