@@ -1,4 +1,4 @@
-from sqlalchemy import create_engine, Column, Integer, String, DateTime, JSON, Enum, Float, ForeignKey, Text, Table
+from sqlalchemy import create_engine, Column, Integer, String, DateTime, JSON, Enum, Float, ForeignKey, Text, Table, Boolean
 from sqlalchemy.orm import relationship, declarative_base, sessionmaker
 from datetime import datetime
 from dotenv import load_dotenv
@@ -43,8 +43,8 @@ class Product(Base):
     name = Column(String, index=True)
     description = Column(Text)
     metal_id = Column(Integer, ForeignKey("metals.id"))
+    availability = Column(Boolean, default=True, nullable=False)
 
-    
     metal_info = relationship("Metal", back_populates="products")
 
     @property

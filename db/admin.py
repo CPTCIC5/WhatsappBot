@@ -25,7 +25,8 @@ class ProductAdmin(ModelView, model=Product):
         Product.name, 
         Product.gross_weight,
         Product.metal_info,
-        "calculated_amount",  
+        "calculated_amount",
+        Product.availability,
         Product.description
     ]
     
@@ -42,13 +43,15 @@ class ProductAdmin(ModelView, model=Product):
         Product.name,
         Product.description,
         Product.gross_weight,
-        Product.metal_info  
+        Product.metal_info,
+        Product.availability,
     ]
     
     column_labels = {
         "calculated_amount": "Amount (₹)",
         "gross_weight": "Gross Weight (g)",
-        "metal_info": "Metal"
+        "metal_info": "Metal",
+        "availability": "Available",
     }
     
     
