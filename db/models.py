@@ -1,9 +1,7 @@
-from sqlalchemy import create_engine, Column, Integer, String, DateTime, JSON, Enum, Float, ForeignKey, Text
+from sqlalchemy import create_engine, Column, Integer, String, DateTime, JSON, Enum, Float, ForeignKey, Text, Table
 from sqlalchemy.orm import relationship, declarative_base, sessionmaker
-from sqlalchemy.sql import func
 from datetime import datetime
 from dotenv import load_dotenv
-import enum
 
 load_dotenv()
 
@@ -63,19 +61,40 @@ class Product(Base):
 
 
 
+# Association table for Group <-> Lead (many-to-many)
+group_leads = Table(
+    "group_leads",
+    Base.metadata,
+    Column("group_id", Integer, ForeignKey("groups.id"), primary_key=True),
+    Column("lead_id", Integer, ForeignKey("leads.id"), primary_key=True),
+)
+
 class Lead(Base):
     __tablename__ = "leads"
 
     id = Column(Integer, primary_key=True, index=True)
     name = Column(String, index=True)
-    tag= Column(Enum("new", "existing", name="lead_tags"))
+    tag= Column(Enum("new", "existing", name="lead_tags"), default="new")
     email = Column(String, unique=True, index=True)
     phone = Column(String, unique=True, index=True)
     created_at = Column(DateTime,  default=datetime.utcnow)
 
+    groups = relationship("Group", secondary=group_leads, back_populates="leads")
     def __repr__(self):
         return self.name
-    
+
+
+class Group(Base):
+    __tablename__ = "groups"
+
+    id = Column(Integer, primary_key=True, index=True)
+    name = Column(String, index=True, nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    leads = relationship("Lead", secondary=group_leads, back_populates="groups")
+
+    def __repr__(self):
+        return self.name
 
 
 class WhatsAppTemplate(Base):
@@ -121,3 +140,16 @@ class WhatsAppTemplate(Base):
         onupdate=datetime.utcnow
     )
     last_synced_at = Column(DateTime, nullable=True)
+
+"""
+# Create a group and add leads
+group = Group(name="VIP Customers")
+db.add(group)
+db.flush()
+group.leads.extend([lead1, lead2])
+db.commit()
+
+# Or append one lead
+group.leads.append(lead)
+db.commit()
+"""

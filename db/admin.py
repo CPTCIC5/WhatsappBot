@@ -1,4 +1,4 @@
-from db.models import Product, Metal, Lead
+from db.models import Product, Metal, Lead, Group
 from sqladmin import ModelView
 
 class MetalAdmin(ModelView, model=Metal):
@@ -76,4 +76,26 @@ class LeadAdmin(ModelView, model=Lead):
    
     column_formatters = {
         "created_at": lambda m, a: m.created_at.strftime("%Y-%m-%d %H:%M:%S") if m.created_at else ""
+    }
+
+
+class GroupAdmin(ModelView, model=Group):
+    name = "Group"
+    name_plural = "Groups"
+    icon = "fa-solid fa-users"
+
+    column_list = [Group.id, Group.name, Group.leads, Group.created_at]
+    column_searchable_list = [Group.name]
+    column_sortable_list = [Group.id, Group.name, Group.created_at]
+
+    form_columns = [Group.name, Group.leads]
+
+    column_labels = {
+        "created_at": "Created At",
+        "leads": "Leads",
+    }
+
+    column_formatters = {
+        "created_at": lambda m, a: m.created_at.strftime("%Y-%m-%d %H:%M:%S") if m.created_at else "",
+        "leads": lambda m, a: f"{len(m.leads)} lead(s)" if m.leads else "0 leads",
     }

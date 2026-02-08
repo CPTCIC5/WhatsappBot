@@ -1,4 +1,4 @@
-from fastapi import FastAPI, APIRouter, Request, HTTPException
+from fastapi import FastAPI, APIRouter, Request, HTTPException, Depends
 from fastapi.responses import PlainTextResponse
 import os
 from dotenv import load_dotenv
@@ -8,7 +8,8 @@ from pathlib import Path
 import sqladmin
 from fastapi.staticfiles import StaticFiles
 import shutil
-from db.models import Base, engine
+from db.models import Base, engine, get_db, Lead
+from sqlalchemy.orm import Session
 
 load_dotenv()
 
@@ -24,9 +25,23 @@ static_path = Path("static")
 static_path.mkdir(exist_ok=True)
 
 @router.post("/webhook")
-async def webhook(request: Request):
+async def webhook(request: Request, db: Session = Depends(get_db)):
     body = await request.json()
+    contact = (
+    body.get("entry", [{}])[0]
+        .get("changes", [{}])[0]
+        .get("value", {})
+        .get("contacts", [{}])[0]
+)
+    wa_id = contact.get("wa_id")
+    name = contact.get("profile", {}).get("name")
     print("Incoming webhook message:", body)
+    print("User Number", wa_id, "User Name", name)
+    if db.query(Lead).filter(Lead.phone == wa_id).first() is None and wa_id is not None:
+        new_lead = Lead(phone=wa_id, name=name)
+        db.add(new_lead)
+        db.commit()
+        print(f"New lead created with wa_id: {wa_id}")
 
     message = body.get("entry", [{}])[0].get("changes", [{}])[0].get("value", {}).get("messages", [{}])[0]
 
@@ -90,10 +105,11 @@ app.include_router(router)
 from sqladmin import Admin
 admin = Admin(app, engine)
 
-from db.admin import ProductAdmin, MetalAdmin, LeadAdmin
+from db.admin import ProductAdmin, MetalAdmin, LeadAdmin, GroupAdmin
 admin.add_view(MetalAdmin)
 admin.add_view(ProductAdmin)
 admin.add_view(LeadAdmin)
+admin.add_view(GroupAdmin)
 
 if __name__ == "__main__":
     import uvicorn
