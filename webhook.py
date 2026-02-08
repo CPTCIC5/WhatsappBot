@@ -38,17 +38,22 @@ async def webhook(request: Request, db: Session = Depends(get_db)):
     print("Incoming webhook message:", body)
     print("User Number", wa_id, "User Name", name)
     if db.query(Lead).filter(Lead.phone == wa_id).first() is None and wa_id is not None:
-        new_lead = Lead(phone=wa_id, name=name)
+        from openai import OpenAI
+        openai_client = OpenAI()
+        # Responses API: one conversation per lead (stored in thread_id)
+        new_conv = openai_client.conversations.create()
+        new_lead = Lead(phone=wa_id, name=name, thread_id=new_conv.id)
         db.add(new_lead)
         db.commit()
-        print(f"New lead created with wa_id: {wa_id}")
+        print(f"New lead created with wa_id: {wa_id}, conversation_id={new_conv.id}")
 
     message = body.get("entry", [{}])[0].get("changes", [{}])[0].get("value", {}).get("messages", [{}])[0]
 
     if message.get("type") == "text":
         business_phone_number_id = body.get("entry", [{}])[0].get("changes", [{}])[0].get("value", {}).get("metadata", {}).get("phone_number_id")
         content = message["text"]["body"]
-        response_gpt = chat_with_assistant(content)
+        lead = db.query(Lead).filter(Lead.phone == wa_id).first()
+        response_gpt = chat_with_assistant(lead.id, content) if lead else chat_with_assistant(None, content)
         print(response_gpt, 'xyz')
 
         reply_data = {

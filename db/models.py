@@ -75,6 +75,7 @@ class Lead(Base):
     id = Column(Integer, primary_key=True, index=True)
     name = Column(String, index=True)
     tag= Column(Enum("new", "existing", name="lead_tags"), default="new")
+    thread_id= Column(String, index=True, nullable=True)
     email = Column(String, unique=True, index=True)
     phone = Column(String, unique=True, index=True)
     created_at = Column(DateTime,  default=datetime.utcnow)

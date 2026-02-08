@@ -294,11 +294,10 @@ def _handle_tool_call(db: Session, name: str, arguments: dict):
         return json.dumps({"error": str(e)})
 
 
-def chat_with_assistant(content: str) -> str:
-    """Chat with the assistant; product tools are called automatically when the user asks for product data."""
+def chat_with_assistant(lead_id: int | None, content: str) -> str:
+    """Chat with the assistant; product tools are called automatically. Uses conversation in lead.thread_id when lead_id is set."""
     db = SessionLocal()
     try:
-        # Save any phone number in the message as a lead if not already present (name from message or 'unknown')
         ensure_leads_from_message(db, content)
 
         developer_instruction = (
@@ -307,23 +306,47 @@ def chat_with_assistant(content: str) -> str:
             "You can also search by name, metal, karat, price, or availability using the other product tools. "
             "Reply in a friendly, concise way. Do not ask which brand or store—you are this store's assistant."
         )
-        input_list = [
-            {"role": "developer", "content": developer_instruction},
-            {"role": "user", "content": content},
-        ]
         tools = [{"type": "web_search", "filters": {"allowed_domains": ["ridra.in"]}}] + PRODUCT_TOOLS
 
-        max_rounds = 5
-        for _ in range(max_rounds):
-            resp = client.responses.create(
-                model=model,
-                input=input_list,
-                tools=tools,
-            )
-            # Append full response output (e.g. reasoning, function_call) so the model can continue
-            input_list += list(resp.output)
+        # Resolve conversation id from lead (Responses API conversation stored in thread_id)
+        conversation_id: str | None = None
+        if lead_id is not None:
+            lead = db.query(LeadModel).filter(LeadModel.id == lead_id).first()
+            if lead and lead.thread_id:
+                conversation_id = lead.thread_id
+            elif lead:
+                # Old lead without thread_id: create conversation and persist
+                new_conv = client.conversations.create()
+                conversation_id = new_conv.id
+                lead.thread_id = new_conv.id
+                db.commit()
 
+        # With conversation: pass only new user message; API prepends conversation history.
+        # Without: build full input list so tool-call rounds keep context.
+        if conversation_id:
+            input_list = [{"role": "user", "content": content}]
+        else:
+            input_list = [
+                {"role": "developer", "content": developer_instruction},
+                {"role": "user", "content": content},
+            ]
+        create_kw: dict = {
+            "model": model,
+            "instructions": developer_instruction if conversation_id else None,
+            "input": input_list,
+            "tools": tools,
+        }
+        if conversation_id:
+            create_kw["conversation"] = conversation_id
+        if create_kw["instructions"] is None:
+            del create_kw["instructions"]
+
+        max_rounds = 5
+        resp = None
+        for _ in range(max_rounds):
+            resp = client.responses.create(**create_kw)
             has_tool_call = False
+            tool_outputs = []
             for item in resp.output:
                 if getattr(item, "type", None) != "function_call":
                     continue
@@ -336,20 +359,18 @@ def chat_with_assistant(content: str) -> str:
                 except json.JSONDecodeError:
                     arguments = {}
                 result = _handle_tool_call(db, name, arguments)
-                input_list.append({
+                tool_outputs.append({
                     "type": "function_call_output",
                     "call_id": call_id,
                     "output": result,
                 })
-
             if not has_tool_call:
                 return resp.output_text or ""
-
-        return resp.output_text or ""
+            if conversation_id:
+                create_kw["input"] = tool_outputs
+            else:
+                create_kw["input"] = input_list + list(resp.output) + tool_outputs
+                input_list = create_kw["input"]
+        return (resp.output_text or "") if resp else ""
     finally:
         db.close()
-
-
-
-# x1= input("Enter the content: ")
-# print(chat_with_assistant(x1))
