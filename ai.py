@@ -1,9 +1,10 @@
+import re
 from openai import OpenAI
 from sqlalchemy.orm import Session, joinedload
 from dotenv import load_dotenv
 import os
 import json
-from db.models import Product as ProductModel, Metal as MetalModel, SessionLocal
+from db.models import Product as ProductModel, Metal as MetalModel, Lead as LeadModel, SessionLocal
 from pydantic import BaseModel
 
 load_dotenv()
@@ -111,6 +112,70 @@ def get_products_by_availability(db: Session, available: bool):
         .filter(ProductModel.availability == available)
     )
     return _products_to_response(q.all())
+
+
+# --- Lead extraction from user message ---
+
+def _normalize_phone(s: str) -> str:
+    """Return digits only for consistent storage and lookup."""
+    return re.sub(r"\D", "", s)
+
+
+def _extract_phone_numbers(text: str) -> list[str]:
+    """Extract phone-like numbers from text (10+ digits, optionally with + or spaces/dashes)."""
+    if not text or not text.strip():
+        return []
+    # Match sequences of digits, possibly with + prefix or spaces/dashes between digit groups
+    raw = re.findall(r"\+?[\d\s\-\.\(\)]{10,}", text)
+    normalized = []
+    for s in raw:
+        n = _normalize_phone(s)
+        if len(n) >= 10 and n not in normalized:
+            normalized.append(n)
+    return normalized
+
+
+def _extract_name_from_message(text: str) -> str | None:
+    """Try to extract a name from the message; return None if not found."""
+    if not text or not text.strip():
+        return None
+    t = text.strip()
+    # "name is X", "name: X", "i'm X", "i am X", "my name is X", "this is X"
+    for pattern in [
+        r"(?:name\s+is|name\s*:)\s*([a-zA-Z][a-zA-Z\s]{0,50}?)(?:\s+\d|\s*$|,)",
+        r"(?:i\s*['']?m|i\s+am)\s+([a-zA-Z][a-zA-Z\s]{0,50}?)(?:\s+\d|\s*$|,)",
+        r"(?:my\s+name\s+is)\s+([a-zA-Z][a-zA-Z\s]{0,50}?)(?:\s+\d|\s*$|,)",
+        r"(?:this\s+is)\s+([a-zA-Z][a-zA-Z\s]{0,50}?)(?:\s+\d|\s*$|,)",
+        r"(?:call me|contact)\s+([a-zA-Z][a-zA-Z\s]{0,50}?)(?:\s+\d|\s*$|,)",
+    ]:
+        m = re.search(pattern, t, re.IGNORECASE)
+        if m:
+            name = m.group(1).strip()
+            if name and len(name) <= 100:
+                return name
+    return None
+
+
+def ensure_leads_from_message(db: Session, content: str) -> None:
+    """
+    If the message contains any phone number that is not in the leads table,
+    save it as a new lead. Use extracted name if present, otherwise 'unknown'.
+    """
+    phones = _extract_phone_numbers(content)
+    if not phones:
+        return
+    name = _extract_name_from_message(content) or "unknown"
+    for phone in phones:
+        if db.query(LeadModel).filter(LeadModel.phone == phone).first() is not None:
+            continue
+        try:
+            lead = LeadModel(phone=phone, name=name, email=None)
+            db.add(lead)
+            db.commit()
+        except Exception:
+            db.rollback()
+            # e.g. duplicate from race, or DB constraint
+            raise
 
 
 # Tool definitions for the Responses API (function calling)
@@ -233,6 +298,9 @@ def chat_with_assistant(content: str) -> str:
     """Chat with the assistant; product tools are called automatically when the user asks for product data."""
     db = SessionLocal()
     try:
+        # Save any phone number in the message as a lead if not already present (name from message or 'unknown')
+        ensure_leads_from_message(db, content)
+
         developer_instruction = (
             "You are a helpful store assistant. You have access to this store's product database. "
             "When the user asks to list, show, or get products (e.g. 'list me all the products'), use the get_all_products tool to fetch data from the database, then summarize the results for the user. "
