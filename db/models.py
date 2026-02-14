@@ -39,6 +39,7 @@ class Product(Base):
     id = Column(Integer, primary_key=True, index=True)
     style_no = Column(String, index=True)
     jewel_code = Column(String, index=True)
+    image_url = Column(String, nullable=True)
     gross_weight = Column(Float)  
     name = Column(String, index=True)
     description = Column(Text)

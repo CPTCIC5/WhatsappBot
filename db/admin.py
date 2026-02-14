@@ -27,11 +27,12 @@ class ProductAdmin(ModelView, model=Product):
         Product.metal_info,
         "calculated_amount",
         Product.availability,
-        Product.description
+        Product.description,
+        Product.image_url
     ]
     
     column_searchable_list = [Product.name, Product.style_no, Product.jewel_code]
-    column_sortable_list = [Product.id, Product.name, Product.style_no, Product.gross_weight]
+    column_sortable_list = [Product.id, Product.name, Product.style_no, Product.gross_weight, Product.image_url]
     
     
     column_details_exclude_list = []
@@ -45,6 +46,7 @@ class ProductAdmin(ModelView, model=Product):
         Product.gross_weight,
         Product.metal_info,
         Product.availability,
+        Product.image_url
     ]
     
     column_labels = {
