@@ -17,6 +17,7 @@ class Product(BaseModel):
     jewel_code: str | None = None
     name: str | None = None
     gross_weight: float | None = None
+    image_url: str | None = None
     metal_info: str | None = None
     calculated_amount: float | None = None
     description: str | None = None
@@ -31,6 +32,7 @@ def _products_to_response(products: list[ProductModel]) -> dict:
             style_no=p.style_no,
             jewel_code=p.jewel_code,
             name=p.name,
+            image_url=p.image_url,
             gross_weight=p.gross_weight,
             metal_info=str(p.metal_info) if p.metal_info else None,
             calculated_amount=p.calculated_amount,
