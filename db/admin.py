@@ -1,4 +1,4 @@
-from db.models import Product, Metal, Lead, Group
+from db.models import Product, Metal, Lead, Group, WhatsAppTemplate
 from sqladmin import ModelView
 
 class MetalAdmin(ModelView, model=Metal):
@@ -104,3 +104,6 @@ class GroupAdmin(ModelView, model=Group):
         "created_at": lambda m, a: m.created_at.strftime("%Y-%m-%d %H:%M:%S") if m.created_at else "",
         "leads": lambda m, a: f"{len(m.leads)} lead(s)" if m.leads else "0 leads",
     }
+
+class WhatsAppTemplateAdmin(ModelView, model=WhatsAppTemplate):
+    pass
