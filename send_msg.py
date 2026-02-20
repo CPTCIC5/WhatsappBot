@@ -123,3 +123,31 @@ def send_group_messages(group_id: int, message_text: str):
 # Example usage for group messages
 # group_results = send_group_messages(group_id=1, message_text="Hello everyone in the group!")
 # print(group_results)
+
+
+
+
+
+def send_img(user_contact_number: str): #JPG.JPEG,PNG
+    url = f"https://graph.facebook.com/{version}/{number_id}/messages"
+ 
+    headers = {
+        "Authorization" : f"Bearer {token}",
+        "Content-type": "application/json"
+    }
+ 
+    data = {
+        "messaging_product": "whatsapp",
+        "recipient_type": "individual",
+        "to": user_contact_number,
+        "type": "image",
+        "image": {
+            "link": "https://picsum.photos/id/237/200/300",  ### use link to send image
+            "caption": "Testing images"  ###
+        }
+    }
+ 
+    response = requests.post(url=url, headers=headers, json=data)
+    return response
+
+print(send_img(user))
