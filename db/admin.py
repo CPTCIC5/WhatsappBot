@@ -1,5 +1,13 @@
 from db.models import Product, Metal, Lead, Group, WhatsAppTemplate
-from sqladmin import ModelView
+from sqladmin import ModelView, action
+from starlette.requests import Request
+from starlette.responses import RedirectResponse
+from wtforms import Form, TextAreaField, validators
+import os
+import requests
+from dotenv import load_dotenv
+
+load_dotenv()
 
 class MetalAdmin(ModelView, model=Metal):
     name = "Metal"
@@ -104,6 +112,143 @@ class GroupAdmin(ModelView, model=Group):
         "created_at": lambda m, a: m.created_at.strftime("%Y-%m-%d %H:%M:%S") if m.created_at else "",
         "leads": lambda m, a: f"{len(m.leads)} lead(s)" if m.leads else "0 leads",
     }
+
+    @action(
+        name="send_message",
+        label="Send WhatsApp Message",
+        confirmation_message="Send message to all leads in selected group(s)?",
+        add_in_detail=True,
+        add_in_list=True,
+    )
+    async def send_whatsapp_message(self, request: Request):
+        """Send WhatsApp message to all leads in the selected group(s)"""
+        from sqlalchemy.orm import Session
+        from db.models import get_db
+        from starlette.responses import HTMLResponse
+        
+        # Get selected group IDs from the request
+        pks = request.query_params.get("pks", "").split(",")
+        
+        if not pks or pks == [""]:
+            request.session["_messages"] = [("error", "No groups selected")]
+            return RedirectResponse(url=request.url_for("admin:list", identity=self.identity), status_code=302)
+        
+        # Get message from query params (if submitted)
+        message_text = request.query_params.get("message_text", "").strip()
+        
+        if message_text:
+            # Message was submitted, send it
+            # Get WhatsApp API credentials
+            token = os.getenv("ACCESS_TOKEN")
+            version = os.getenv("VERSION")
+            number_id = os.getenv("PHONE_NUMBER_ID")
+            
+            if not all([token, version, number_id]):
+                request.session["_messages"] = [("error", "WhatsApp API credentials not configured")]
+                return RedirectResponse(url=request.url_for("admin:list", identity=self.identity), status_code=302)
+            
+            total_sent = 0
+            total_failed = 0
+            
+            # Get database session
+            db = next(get_db())
+            
+            try:
+                # Send messages to each group
+                for pk in pks:
+                    group = db.query(Group).filter(Group.id == int(pk)).first()
+                    if not group or not group.leads:
+                        continue
+                    
+                    url = f"https://graph.facebook.com/{version}/{number_id}/messages"
+                    headers = {
+                        "Authorization": f"Bearer {token}",
+                        "Content-type": "application/json"
+                    }
+                    
+                    # Send to each lead in the group
+                    for lead in group.leads:
+                        data = {
+                            "messaging_product": "whatsapp",
+                            "recipient_type": "individual",
+                            "to": lead.phone,
+                            "type": "text",
+                            "text": {
+                                "body": message_text
+                            }
+                        }
+                        
+                        try:
+                            response = requests.post(url=url, headers=headers, json=data)
+                            if response.status_code == 200:
+                                total_sent += 1
+                            else:
+                                total_failed += 1
+                        except Exception:
+                            total_failed += 1
+            finally:
+                db.close()
+            
+            request.session["_messages"] = [(
+                "success" if total_failed == 0 else "warning",
+                f"Message sent to {total_sent} lead(s). {total_failed} failed."
+            )]
+            return RedirectResponse(url=request.url_for("admin:list", identity=self.identity), status_code=302)
+        
+        # Show message input form - Get group info from database
+        db = next(get_db())
+        group_names = []
+        total_leads = 0
+        
+        try:
+            for pk in pks:
+                group = db.query(Group).filter(Group.id == int(pk)).first()
+                if group:
+                    group_names.append(group.name)
+                    total_leads += len(group.leads) if group.leads else 0
+        finally:
+            db.close()
+        
+        # Build the action URL with pks
+        action_url = str(request.url)
+        
+        html_form = f"""
+        <!DOCTYPE html>
+        <html>
+        <head>
+            <title>Send WhatsApp Message</title>
+            <link rel="stylesheet" href="/static/css/tabler.min.css">
+        </head>
+        <body>
+            <div class="container mt-5">
+                <div class="card">
+                    <div class="card-header">
+                        <h3 class="card-title">Send WhatsApp Message to Group(s)</h3>
+                    </div>
+                    <div class="card-body">
+                        <p><strong>Selected Groups:</strong> {', '.join(group_names)}</p>
+                        <p><strong>Total Recipients:</strong> {total_leads} lead(s)</p>
+                        <form method="GET" action="{action_url}">
+                            <input type="hidden" name="pks" value="{','.join(pks)}">
+                            <div class="mb-3">
+                                <label class="form-label">Message Text</label>
+                                <textarea name="message_text" class="form-control" rows="5" required 
+                                    placeholder="Enter your message here..."></textarea>
+                            </div>
+                            <div class="d-flex gap-2">
+                                <button type="submit" class="btn btn-primary">Send Message</button>
+                                <a href="{request.url_for('admin:list', identity=self.identity)}" 
+                                   class="btn btn-secondary">Cancel</a>
+                            </div>
+                        </form>
+                    </div>
+                </div>
+            </div>
+        </body>
+        </html>
+        """
+        
+        return HTMLResponse(content=html_form)
 
 class WhatsAppTemplateAdmin(ModelView, model=WhatsAppTemplate):
     pass

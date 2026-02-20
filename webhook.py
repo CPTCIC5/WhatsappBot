@@ -1,5 +1,6 @@
 from fastapi import FastAPI, APIRouter, Request, HTTPException, Depends
 from fastapi.responses import PlainTextResponse
+from starlette.middleware.sessions import SessionMiddleware
 import os
 from dotenv import load_dotenv
 import httpx
@@ -88,6 +89,9 @@ async def verify_webhook(request: Request):
 
 
 app = FastAPI()
+
+# Add session middleware for flash messages in admin
+app.add_middleware(SessionMiddleware, secret_key="your-secret-key-here-change-in-production")
 
 sqladmin_static_path = os.path.join(os.path.dirname(sqladmin.__file__), "statics")
 for item in os.listdir(sqladmin_static_path):
