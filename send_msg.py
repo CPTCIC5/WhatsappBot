@@ -8,7 +8,7 @@ load_dotenv()
 token = os.getenv("ACCESS_TOKEN")
 version = os.getenv("VERSION")
 number_id = os.getenv("PHONE_NUMBER_ID")
-user = input("Enter the recipient's phone number (with country code, e.g., +1234567890): ")
+# user = input("Enter the recipient's phone number (with country code, e.g., +1234567890): ")
 
 ############# FOR SENDING MESSAGES MANUALLY #############
 def send_txt_msg():
@@ -128,7 +128,7 @@ def send_group_messages(group_id: int, message_text: str):
 
 
 
-def send_img(user_contact_number: str): #JPG.JPEG,PNG
+def send_img(user_contact_number: str, link: str, caption: str): #JPG.JPEG,PNG
     url = f"https://graph.facebook.com/{version}/{number_id}/messages"
  
     headers = {
@@ -142,12 +142,12 @@ def send_img(user_contact_number: str): #JPG.JPEG,PNG
         "to": user_contact_number,
         "type": "image",
         "image": {
-            "link": "https://picsum.photos/id/237/200/300",  ### use link to send image
-            "caption": "Testing images"  ###
+            "link": link,  
+            "caption": caption 
         }
     }
  
     response = requests.post(url=url, headers=headers, json=data)
     return response
 
-print(send_img(user))
+# print(send_img(user))

@@ -6,6 +6,7 @@ import os
 import json
 from db.models import Product as ProductModel, Metal as MetalModel, Lead as LeadModel, SessionLocal
 from pydantic import BaseModel
+from send_msg import send_img
 
 load_dotenv()
 api = os.getenv("OPENAI_API_KEY")
@@ -266,6 +267,22 @@ PRODUCT_TOOLS = [
         },
         "strict": True,
     },
+    {
+        "type": "function",
+        "name": "send_product_image",
+        "description": "Send a product image to the user via WhatsApp. Use when user asks to see an image, photo, or picture of a product.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "user_contact_number": {"type": "string", "description": "User's WhatsApp phone number with country code."},
+                "image_url": {"type": "string", "description": "URL of the product image to send."},
+                "caption": {"type": "string", "description": "Caption text describing the product (name, price, details)."},
+            },
+            "required": ["user_contact_number", "image_url", "caption"],
+            "additionalProperties": False,
+        },
+        "strict": True,
+    },
 ]
 
 
@@ -289,6 +306,16 @@ def _handle_tool_call(db: Session, name: str, arguments: dict):
             )
         elif name == "get_products_by_availability":
             out = get_products_by_availability(db, arguments["available"])
+        elif name == "send_product_image":
+            response = send_img(
+                user_contact_number=arguments["user_contact_number"],
+                link=arguments["image_url"],
+                caption=arguments["caption"]
+            )
+            if response.status_code == 200:
+                out = {"success": True, "message": "Image sent successfully", "response": response.json()}
+            else:
+                out = {"success": False, "error": f"Failed to send image: {response.status_code}", "response": response.json()}
         else:
             out = {"error": f"Unknown tool: {name}"}
         return json.dumps(out, default=str)
@@ -306,6 +333,7 @@ def chat_with_assistant(lead_id: int | None, content: str) -> str:
             "You are a helpful store assistant. You have access to this store's product database. "
             "When the user asks to list, show, or get products (e.g. 'list me all the products'), use the get_all_products tool to fetch data from the database, then summarize the results for the user. "
             "You can also search by name, metal, karat, price, or availability using the other product tools. "
+            "When a user asks to see an image or photo of a product, use the send_product_image tool with the product's image_url and create a descriptive caption including the product name and price. "
             "Reply in a friendly, concise way. Do not ask which brand or store—you are this store's assistant."
         )
         tools = [{"type": "web_search", "filters": {"allowed_domains": ["ridra.in"]}}] + PRODUCT_TOOLS
