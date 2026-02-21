@@ -1,4 +1,4 @@
-from db.models import Product, Metal, Lead, Group
+from db.models import Product, Metal, Lead, Group, TemplateStorage
 from sqladmin import ModelView, action
 from starlette.requests import Request
 from starlette.responses import RedirectResponse
@@ -397,3 +397,7 @@ class GroupAdmin(ModelView, model=Group):
         """
         
         return HTMLResponse(content=html_form)
+
+
+class TemplateStorageAdmin(ModelView,model=TemplateStorage):
+    column_list = [TemplateStorage.template_name]

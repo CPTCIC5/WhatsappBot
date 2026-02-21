@@ -110,3 +110,14 @@ db.commit()
 group.leads.append(lead)
 db.commit()
 """
+
+class TemplateStorage(Base):
+    __tablename__= "template_storage"
+
+    id= Column(Integer, primary_key=True, index=True)
+    template_name = Column(String, index=True)
+    template_note=  Column(Text, help_text="Note")
+
+
+    def __str__(self):
+        return self.template_name

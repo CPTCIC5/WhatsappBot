@@ -114,11 +114,12 @@ app.include_router(router)
 from sqladmin import Admin
 admin = Admin(app, engine)
 
-from db.admin import ProductAdmin, MetalAdmin, LeadAdmin, GroupAdmin
+from db.admin import ProductAdmin, MetalAdmin, LeadAdmin, GroupAdmin,TemplateStorageAdmin
 admin.add_view(MetalAdmin)
 admin.add_view(ProductAdmin)
 admin.add_view(LeadAdmin)
 admin.add_view(GroupAdmin)
+admin.add_view(TemplateStorageAdmin)
 
 if __name__ == "__main__":
     import uvicorn
