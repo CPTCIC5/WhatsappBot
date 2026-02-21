@@ -98,51 +98,6 @@ class Group(Base):
     def __repr__(self):
         return self.name
 
-
-class WhatsAppTemplate(Base):
-    __tablename__ = "whatsapp_templates"
-
-    id = Column(Integer, primary_key=True, index=True)
-
-    template_name = Column(String, unique=True, index=True, nullable=False)
-    language = Column(String, default="en_US", nullable=False)
-
-    category = Column(
-        Enum(
-            "MARKETING",
-            "UTILITY",
-            "AUTHENTICATION",
-            name="whatsapp_template_category"
-        ),
-        nullable=False
-    )
-
-    use_case = Column(String, index=True, nullable=False)
-
-    components_schema = Column(JSON, nullable=False)
-
-    
-    status = Column(
-        Enum(
-            "APPROVED",
-            "PENDING",
-            "REJECTED",
-            name="whatsapp_template_status"
-        ),
-        default="PENDING"
-    )
-
-    meta_template_id = Column(String, nullable=True)
-
-    
-    created_at = Column(DateTime, default=datetime.utcnow)
-    updated_at = Column(
-        DateTime,
-        default=datetime.utcnow,
-        onupdate=datetime.utcnow
-    )
-    last_synced_at = Column(DateTime, nullable=True)
-
 """
 # Create a group and add leads
 group = Group(name="VIP Customers")

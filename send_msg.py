@@ -151,3 +151,7 @@ def send_img(user_contact_number: str, link: str, caption: str): #JPG.JPEG,PNG
     return response
 
 # print(send_img(user))
+
+
+def send_template_to_group(group_id: int, template_name: str):
+    pass

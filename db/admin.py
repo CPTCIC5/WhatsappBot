@@ -1,4 +1,4 @@
-from db.models import Product, Metal, Lead, Group, WhatsAppTemplate
+from db.models import Product, Metal, Lead, Group
 from sqladmin import ModelView, action
 from starlette.requests import Request
 from starlette.responses import RedirectResponse
@@ -249,6 +249,3 @@ class GroupAdmin(ModelView, model=Group):
         """
         
         return HTMLResponse(content=html_form)
-
-class WhatsAppTemplateAdmin(ModelView, model=WhatsAppTemplate):
-    pass
