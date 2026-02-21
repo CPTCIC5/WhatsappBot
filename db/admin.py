@@ -1,4 +1,4 @@
-from db.models import Product, Metal, Lead, Group, TemplateStorage
+from db.models import Product, Metal, Lead, Group, TemplateStorage, TemplateStorage
 from sqladmin import ModelView, action
 from starlette.requests import Request
 from starlette.responses import RedirectResponse
@@ -335,10 +335,11 @@ class GroupAdmin(ModelView, model=Group):
             )]
             return RedirectResponse(url=request.url_for("admin:list", identity=self.identity), status_code=302)
         
-        # Show template input form - Get group info from database
+        # Show template input form - Get group info and templates from database
         db = next(get_db())
         group_names = []
         total_leads = 0
+        templates = []
         
         try:
             for pk in pks:
@@ -346,8 +347,20 @@ class GroupAdmin(ModelView, model=Group):
                 if group:
                     group_names.append(group.name)
                     total_leads += len(group.leads) if group.leads else 0
+            
+            # Fetch all templates from TemplateStorage
+            templates = db.query(TemplateStorage).all()
         finally:
             db.close()
+        
+        # Build template options for dropdown
+        template_options = ""
+        if templates:
+            for template in templates:
+                note = f" - {template.template_note}" if template.template_note else ""
+                template_options += f'<option value="{template.template_name}">{template.template_name}{note}</option>'
+        else:
+            template_options = '<option value="">No templates available</option>'
         
         # Build the action URL with pks
         action_url = str(request.url)
@@ -373,9 +386,11 @@ class GroupAdmin(ModelView, model=Group):
                             <input type="hidden" name="pks" value="{','.join(pks)}">
                             <div class="mb-3">
                                 <label class="form-label">Template Name</label>
-                                <input type="text" name="template_name" class="form-control" required 
-                                    placeholder="e.g., hello_world">
-                                <small class="form-hint">Enter the exact template name from your WhatsApp Business account</small>
+                                <select name="template_name" class="form-select" required>
+                                    <option value="">Select a template...</option>
+                                    {template_options}
+                                </select>
+                                <small class="form-hint">Select a template from your WhatsApp Business account</small>
                             </div>
                             <div class="mb-3">
                                 <label class="form-label">Language Code</label>
@@ -399,5 +414,18 @@ class GroupAdmin(ModelView, model=Group):
         return HTMLResponse(content=html_form)
 
 
-class TemplateStorageAdmin(ModelView,model=TemplateStorage):
-    column_list = [TemplateStorage.template_name]
+class TemplateStorageAdmin(ModelView, model=TemplateStorage):
+    name = "Template"
+    name_plural = "Templates"
+    icon = "fa-solid fa-file-lines"
+    
+    column_list = [TemplateStorage.id, TemplateStorage.template_name, TemplateStorage.template_note]
+    column_searchable_list = [TemplateStorage.template_name]
+    column_sortable_list = [TemplateStorage.id, TemplateStorage.template_name]
+    
+    form_columns = [TemplateStorage.template_name, TemplateStorage.template_note]
+    
+    column_labels = {
+        "template_name": "Template Name",
+        "template_note": "Note"
+    }
