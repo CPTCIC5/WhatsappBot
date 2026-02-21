@@ -354,6 +354,7 @@ class GroupAdmin(ModelView, model=Group):
         
         html_form = f"""
         <!DOCTYPE html>
+        
         <html>
         <head>
             <title>Send WhatsApp Template</title>
