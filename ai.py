@@ -274,11 +274,10 @@ PRODUCT_TOOLS = [
         "parameters": {
             "type": "object",
             "properties": {
-                "user_contact_number": {"type": "string", "description": "User's WhatsApp phone number with country code."},
                 "image_url": {"type": "string", "description": "URL of the product image to send."},
                 "caption": {"type": "string", "description": "Caption text describing the product (name, price, details)."},
             },
-            "required": ["user_contact_number", "image_url", "caption"],
+            "required": ["image_url", "caption"],
             "additionalProperties": False,
         },
         "strict": True,
@@ -286,7 +285,7 @@ PRODUCT_TOOLS = [
 ]
 
 
-def _handle_tool_call(db: Session, name: str, arguments: dict):
+def _handle_tool_call(db: Session, name: str, arguments: dict, user_phone: str | None = None):
     """Execute a product tool and return JSON string result."""
     try:
         if name == "get_all_products":
@@ -307,15 +306,18 @@ def _handle_tool_call(db: Session, name: str, arguments: dict):
         elif name == "get_products_by_availability":
             out = get_products_by_availability(db, arguments["available"])
         elif name == "send_product_image":
-            response = send_img(
-                user_contact_number=arguments["user_contact_number"],
-                link=arguments["image_url"],
-                caption=arguments["caption"]
-            )
-            if response.status_code == 200:
-                out = {"success": True, "message": "Image sent successfully", "response": response.json()}
+            if not user_phone:
+                out = {"success": False, "error": "User phone number not available"}
             else:
-                out = {"success": False, "error": f"Failed to send image: {response.status_code}", "response": response.json()}
+                response = send_img(
+                    user_contact_number=user_phone,
+                    link=arguments["image_url"],
+                    caption=arguments["caption"]
+                )
+                if response.status_code == 200:
+                    out = {"success": True, "message": "Image sent successfully", "response": response.json()}
+                else:
+                    out = {"success": False, "error": f"Failed to send image: {response.status_code}", "response": response.json()}
         else:
             out = {"error": f"Unknown tool: {name}"}
         return json.dumps(out, default=str)
@@ -328,6 +330,13 @@ def chat_with_assistant(lead_id: int | None, content: str) -> str:
     db = SessionLocal()
     try:
         ensure_leads_from_message(db, content)
+
+        # Get user phone from lead
+        user_phone: str | None = None
+        if lead_id is not None:
+            lead = db.query(LeadModel).filter(LeadModel.id == lead_id).first()
+            if lead:
+                user_phone = lead.phone
 
         developer_instruction = (
             "You are a helpful store assistant. You have access to this store's product database. "
@@ -388,7 +397,7 @@ def chat_with_assistant(lead_id: int | None, content: str) -> str:
                     arguments = json.loads(arguments_raw) if isinstance(arguments_raw, str) else arguments_raw
                 except json.JSONDecodeError:
                     arguments = {}
-                result = _handle_tool_call(db, name, arguments)
+                result = _handle_tool_call(db, name, arguments, user_phone)
                 tool_outputs.append({
                     "type": "function_call_output",
                     "call_id": call_id,
