@@ -247,7 +247,8 @@ def send_template_to_group(
     group_id: int,
     template_name: str,
     language_code: str = "en_US",
-    body_parameters: list[str] = None,       # e.g. ["John", "Monday"] for {{1}}, {{2}}
+    #body_parameters: list[str] = None,       # e.g. ["John", "Monday"] for {{1}}, {{2}}
+    body_parameters: dict = None,       # e.g. {"name": "Aryan", "jewel": "Necklace Set"}
     header_media_url: str = None,             # e.g. "https://example.com/image.jpg"
     header_media_type: str = "image",         # "image", "video", or "document"
 ):
@@ -304,6 +305,7 @@ def send_template_to_group(
             })
 
         # Body component (text parameters)
+        """
         if body_parameters:
             components.append({
                 "type": "body",
@@ -312,6 +314,17 @@ def send_template_to_group(
                     for param in body_parameters
                 ]
             })
+        """
+
+        if body_parameters:
+            components.append({
+                "type": "body",
+                "parameters": [
+                    {"type": "text", "parameter_name": name, "text": str(value)}
+                    for name, value in body_parameters.items()
+                ]
+            })
+
 
         for lead in group.leads:
             data = {
@@ -359,3 +372,15 @@ def send_template_to_group(
         return results
     finally:
         db.close()
+
+
+#Example CLI command to test
+"""
+send_template_to_group(
+    group_id=1,
+    template_name="monday_template",
+    body_parameters={"name": "Aryan", "jewel": "Necklace Set"},
+    header_media_url="https://i.imgur.com/RYBkxXL.jpeg",
+    header_media_type="image"
+)
+"""
