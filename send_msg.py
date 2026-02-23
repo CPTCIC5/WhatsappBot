@@ -247,10 +247,10 @@ def send_template_to_group(
     group_id: int,
     template_name: str,
     language_code: str = "en_US",
-    #body_parameters: list[str] = None,       # e.g. ["John", "Monday"] for {{1}}, {{2}}
-    body_parameters: dict = None,       # e.g. {"name": "Aryan", "jewel": "Necklace Set"}
+    body_parameters: dict = None,       # e.g. {"name": "", "jewel": "Necklace Set"}
     header_media_url: str = None,             # e.g. "https://example.com/image.jpg"
     header_media_type: str = "image",         # "image", "video", or "document"
+    use_named_parameters: bool = True,  # Set to True for named parameters, False for positional
 ):
     """
     Send a WhatsApp template message to all leads in a specific group.
@@ -258,9 +258,11 @@ def send_template_to_group(
         group_id: The ID of the group from the database
         template_name: The name of the WhatsApp template to send
         language_code: The language code for the template (default: "en_US")
-        body_parameters: List of positional parameter values for {{1}}, {{2}}, etc.
+        body_parameters: Dict of parameter names and values. If parameter name is "name" and value is empty, 
+                        it will auto-fetch from lead.name
         header_media_url: Optional URL for media in the header (image/video/document)
         header_media_type: Type of media — "image", "video", or "document"
+        use_named_parameters: Whether to use named parameters (True) or positional (False)
     Returns:
         dict: Summary of sent messages with success/failure counts
     """
@@ -287,46 +289,54 @@ def send_template_to_group(
             "Content-type": "application/json"
         }
 
-        # Build the components list
-        components = []
-
-        # Header component (media)
-        if header_media_url:
-            components.append({
-                "type": "header",
-                "parameters": [
-                    {
-                        "type": header_media_type,
-                        header_media_type: {
-                            "link": header_media_url
-                        }
-                    }
-                ]
-            })
-
-        # Body component (text parameters)
-        """
-        if body_parameters:
-            components.append({
-                "type": "body",
-                "parameters": [
-                    {"type": "text", "text": str(param)}
-                    for param in body_parameters
-                ]
-            })
-        """
-
-        if body_parameters:
-            components.append({
-                "type": "body",
-                "parameters": [
-                    {"type": "text", "parameter_name": name, "text": str(value)}
-                    for name, value in body_parameters.items()
-                ]
-            })
-
-
         for lead in group.leads:
+            # Build the components list for each lead
+            components = []
+
+            # Header component (media)
+            if header_media_url:
+                components.append({
+                    "type": "header",
+                    "parameters": [
+                        {
+                            "type": header_media_type,
+                            header_media_type: {
+                                "link": header_media_url
+                            }
+                        }
+                    ]
+                })
+
+            # Body component (text parameters)
+            if body_parameters:
+                body_params_list = []
+                for param_name, param_value in body_parameters.items():
+                    # Auto-fetch lead name if parameter name is "name" and value is empty
+                    if param_name.lower() == "name" and not param_value:
+                        param_value = lead.name
+                    
+                    # Only add if value is not empty
+                    if param_value:
+                        if use_named_parameters:
+                            # Named parameter format (newer WhatsApp API)
+                            body_params_list.append({
+                                "type": "text",
+                                "text": str(param_value),
+                                "parameter_name": param_name
+                            })
+                        else:
+                            # Positional parameter format (older WhatsApp API)
+                            body_params_list.append({
+                                "type": "text",
+                                "text": str(param_value)
+                            })
+                
+                if body_params_list:
+                    components.append({
+                        "type": "body",
+                        "parameters": body_params_list
+                    })
+
             data = {
                 "messaging_product": "whatsapp",
                 "to": lead.phone,
@@ -380,6 +390,16 @@ send_template_to_group(
     group_id=1,
     template_name="monday_template",
     body_parameters={"name": "Aryan", "jewel": "Necklace Set"},
+    header_media_url="https://i.imgur.com/RYBkxXL.jpeg",
+    header_media_type="image",
+    use_named_parameters=True  # Set to True for named parameters (default), False for positional
+)
+
+# For auto-fetch lead name, leave the value empty:
+send_template_to_group(
+    group_id=1,
+    template_name="monday_template",
+    body_parameters={"name": "", "jewel": "Necklace Set"},  # name will auto-fetch from lead.name
     header_media_url="https://i.imgur.com/RYBkxXL.jpeg",
     header_media_type="image"
 )

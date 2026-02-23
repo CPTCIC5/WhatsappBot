@@ -413,6 +413,232 @@ class GroupAdmin(ModelView, model=Group):
         
         return HTMLResponse(content=html_form)
 
+    @action(
+        name="send_template_advanced",
+        label="Send Template (Advanced)",
+        confirmation_message="Send advanced template to all leads in selected group(s)?",
+        add_in_detail=True,
+        add_in_list=True,
+    )
+    async def send_whatsapp_template_advanced(self, request: Request):
+        """Send WhatsApp template with dynamic parameters and header media"""
+        from db.models import get_db
+        from starlette.responses import HTMLResponse
+        import json
+        
+        # Get selected group IDs from the request
+        pks = request.query_params.get("pks", "").split(",")
+        
+        if not pks or pks == [""]:
+            request.session["_messages"] = [("error", "No groups selected")]
+            return RedirectResponse(url=request.url_for("admin:list", identity=self.identity), status_code=302)
+        
+        # Check if form was submitted
+        template_name = request.query_params.get("template_name", "").strip()
+        
+        if template_name:
+            # Form submitted - process and send
+            from send_msg import send_template_to_group
+            
+            language_code = request.query_params.get("language_code", "en_US").strip()
+            header_media_url = request.query_params.get("header_media_url", "").strip()
+            header_media_type = request.query_params.get("header_media_type", "image").strip()
+            
+            # Parse body parameters from form
+            body_params_json = request.query_params.get("body_params", "").strip()
+            body_parameters = {}
+            
+            if body_params_json:
+                try:
+                    body_parameters = json.loads(body_params_json)
+                except:
+                    pass
+            
+            total_sent = 0
+            total_failed = 0
+            
+            # Send to each selected group
+            for pk in pks:
+                try:
+                    result = send_template_to_group(
+                        group_id=int(pk),
+                        template_name=template_name,
+                        language_code=language_code,
+                        body_parameters=body_parameters if body_parameters else None,
+                        header_media_url=header_media_url if header_media_url else None,
+                        header_media_type=header_media_type,
+                        use_named_parameters=True  # Use named parameters for WhatsApp templates
+                    )
+                    
+                    if "error" not in result:
+                        total_sent += result.get("successful", 0)
+                        total_failed += result.get("failed", 0)
+                except Exception as e:
+                    total_failed += 1
+            
+            request.session["_messages"] = [(
+                "success" if total_failed == 0 else "warning",
+                f"Template sent to {total_sent} lead(s). {total_failed} failed."
+            )]
+            return RedirectResponse(url=request.url_for("admin:list", identity=self.identity), status_code=302)
+        
+        # Show form - Get group info and templates
+        db = next(get_db())
+        group_names = []
+        total_leads = 0
+        templates = []
+        
+        try:
+            for pk in pks:
+                group = db.query(Group).filter(Group.id == int(pk)).first()
+                if group:
+                    group_names.append(group.name)
+                    total_leads += len(group.leads) if group.leads else 0
+            
+            templates = db.query(TemplateStorage).all()
+        finally:
+            db.close()
+        
+        # Build template options
+        template_options = ""
+        if templates:
+            for template in templates:
+                note = f" - {template.template_note}" if template.template_note else ""
+                template_options += f'<option value="{template.template_name}">{template.template_name}{note}</option>'
+        else:
+            template_options = '<option value="">No templates available</option>'
+        
+        action_url = str(request.url)
+        
+        html_form = f"""
+        <!DOCTYPE html>
+        <html>
+        <head>
+            <title>Send Advanced WhatsApp Template</title>
+            <link rel="stylesheet" href="/static/css/tabler.min.css">
+            <style>
+                .param-row {{
+                    display: flex;
+                    gap: 10px;
+                    margin-bottom: 10px;
+                    align-items: center;
+                }}
+                .param-row input {{
+                    flex: 1;
+                }}
+                .param-row button {{
+                    flex-shrink: 0;
+                }}
+            </style>
+        </head>
+        <body>
+            <div class="container mt-5">
+                <div class="card">
+                    <div class="card-header">
+                        <h3 class="card-title">Send Advanced WhatsApp Template</h3>
+                    </div>
+                    <div class="card-body">
+                        <p><strong>Selected Groups:</strong> {', '.join(group_names)}</p>
+                        <p><strong>Total Recipients:</strong> {total_leads} lead(s)</p>
+                        
+                        <form method="GET" action="{action_url}" id="templateForm">
+                            <input type="hidden" name="pks" value="{','.join(pks)}">
+                            <input type="hidden" name="body_params" id="bodyParamsInput">
+                            
+                            <div class="mb-3">
+                                <label class="form-label">Template Name</label>
+                                <select name="template_name" class="form-select" required>
+                                    <option value="">Select a template...</option>
+                                    {template_options}
+                                </select>
+                            </div>
+                            
+                            <div class="mb-3">
+                                <label class="form-label">Language Code</label>
+                                <input type="text" name="language_code" class="form-control" value="en_US" required>
+                            </div>
+                            
+                            <div class="mb-3">
+                                <label class="form-label">Header Image URL (Optional)</label>
+                                <input type="url" name="header_media_url" class="form-control" 
+                                    placeholder="https://example.com/image.jpg">
+                                <small class="form-hint">Leave empty if template has no header image</small>
+                            </div>
+                            
+                            <div class="mb-3">
+                                <label class="form-label">Header Media Type</label>
+                                <select name="header_media_type" class="form-select">
+                                    <option value="image">Image</option>
+                                    <option value="video">Video</option>
+                                    <option value="document">Document</option>
+                                </select>
+                            </div>
+                            
+                            <div class="mb-3">
+                                <label class="form-label">Body Parameters</label>
+                                <small class="form-hint d-block mb-2">
+                                    Add key-value pairs for template variables. 
+                                    Use "name" as key to auto-fetch from lead name.
+                                </small>
+                                <div id="paramsContainer">
+                                    <div class="param-row">
+                                        <input type="text" class="form-control param-key" placeholder="Parameter name (e.g., name, jewel)">
+                                        <input type="text" class="form-control param-value" placeholder="Value (leave empty for 'name' to auto-fetch)">
+                                        <button type="button" class="btn btn-danger btn-sm" onclick="removeParam(this)">Remove</button>
+                                    </div>
+                                </div>
+                                <button type="button" class="btn btn-secondary btn-sm mt-2" onclick="addParam()">Add Parameter</button>
+                            </div>
+                            
+                            <div class="d-flex gap-2">
+                                <button type="submit" class="btn btn-primary">Send Template</button>
+                                <a href="{request.url_for('admin:list', identity=self.identity)}" 
+                                   class="btn btn-secondary">Cancel</a>
+                            </div>
+                        </form>
+                    </div>
+                </div>
+            </div>
+            
+            <script>
+                function addParam() {{
+                    const container = document.getElementById('paramsContainer');
+                    const row = document.createElement('div');
+                    row.className = 'param-row';
+                    row.innerHTML = `
+                        <input type="text" class="form-control param-key" placeholder="Parameter name (e.g., name, jewel)">
+                        <input type="text" class="form-control param-value" placeholder="Value (leave empty for 'name' to auto-fetch)">
+                        <button type="button" class="btn btn-danger btn-sm" onclick="removeParam(this)">Remove</button>
+                    `;
+                    container.appendChild(row);
+                }}
+                
+                function removeParam(button) {{
+                    button.parentElement.remove();
+                }}
+                
+                document.getElementById('templateForm').addEventListener('submit', function(e) {{
+                    const params = {{}};
+                    const keys = document.querySelectorAll('.param-key');
+                    const values = document.querySelectorAll('.param-value');
+                    
+                    keys.forEach((keyInput, index) => {{
+                        const key = keyInput.value.trim();
+                        const value = values[index].value.trim();
+                        if (key) {{
+                            params[key] = value;
+                        }}
+                    }});
+                    
+                    document.getElementById('bodyParamsInput').value = JSON.stringify(params);
+                }});
+            </script>
+        </body>
+        </html>
+        """
+        
+        return HTMLResponse(content=html_form)
+
 
 class TemplateStorageAdmin(ModelView, model=TemplateStorage):
     name = "Template"
