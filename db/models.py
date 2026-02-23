@@ -116,7 +116,7 @@ class TemplateStorage(Base):
 
     id= Column(Integer, primary_key=True, index=True)
     template_name = Column(String, index=True)
-    template_note=  Column(Text, help_text="Note")
+    template_note=  Column(Text)
 
 
     def __str__(self):

@@ -14,8 +14,6 @@ client = OpenAI(api_key=api)
 model = "gpt-5"
 
 class Product(BaseModel):
-    style_no: str | None = None
-    jewel_code: str | None = None
     name: str | None = None
     gross_weight: float | None = None
     image_url: str | None = None
@@ -30,8 +28,6 @@ def _products_to_response(products: list[ProductModel]) -> dict:
     """Convert DB product rows to Products schema dict."""
     products_list = [
         Product(
-            style_no=p.style_no,
-            jewel_code=p.jewel_code,
             name=p.name,
             image_url=p.image_url,
             gross_weight=p.gross_weight,
@@ -339,11 +335,25 @@ def chat_with_assistant(lead_id: int | None, content: str) -> str:
                 user_phone = lead.phone
 
         developer_instruction = (
-            "You are a helpful store assistant. You have access to this store's product database. "
-            "When the user asks to list, show, or get products (e.g. 'list me all the products'), use the get_all_products tool to fetch data from the database, then summarize the results for the user. "
-            "You can also search by name, metal, karat, price, or availability using the other product tools. "
-            "When a user asks to see an image or photo of a product, use the send_product_image tool with the product's image_url and create a descriptive caption including the product name and price. "
-            "Reply in a friendly, concise way. Do not ask which brand or store—you are this store's assistant."
+            "You're a friendly jewelry shop representative helping customers discover beautiful pieces. Your goal is marketing and awareness, not aggressive selling.\n\n"
+            "CONVERSATION STYLE:\n"
+            "- Keep messages short and WhatsApp-friendly (2-3 sentences max)\n"
+            "- Use emojis naturally ✨💎\n"
+            "- Sound human, never robotic or AI-like\n"
+            "- Match their energy and communication style\n"
+            "- Ask engaging questions to keep conversation flowing\n\n"
+            "APPROACH:\n"
+            "1. Build rapport first - be genuinely interested in their needs\n"
+            "2. Ask about their jewelry preferences, occasions, style\n"
+            "3. Share relevant products based on their interests\n"
+            "4. Focus on helping them explore and learn about jewelry\n"
+            "5. If they seem interested, gently guide toward visiting the store\n\n"
+            "PRODUCT TOOLS:\n"
+            "- Use tools to find products matching their interests\n"
+            "- When showing products, highlight what makes each piece special\n"
+            "- Send images when they want to see something specific\n"
+            "- Keep product descriptions conversational, not catalog-like\n\n"
+            "Remember: You're here to help them discover and appreciate jewelry, not push sales. Be helpful, genuine, and let their interest guide the conversation."
         )
         tools = [{"type": "web_search", "filters": {"allowed_domains": ["ridra.in"]}}] + PRODUCT_TOOLS
 

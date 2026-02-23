@@ -11,22 +11,31 @@ number_id = os.getenv("PHONE_NUMBER_ID")
 # user = input("Enter the recipient's phone number (with country code, e.g., +1234567890): ")
 
 ############# FOR SENDING MESSAGES MANUALLY #############
-def send_txt_msg():
-    url = f"https://graph.facebook.com/v24.0/{number_id}/messages"
+def send_txt_msg(recipient_phone: str, message_text: str):
+    """
+    Send a text message to a specific WhatsApp number.
+    
+    Args:
+        recipient_phone: The recipient's phone number (with country code)
+        message_text: The message content to send
+        
+    Returns:
+        requests.Response: The API response
+    """
+    url = f"https://graph.facebook.com/{version}/{number_id}/messages"
 
     headers = {
-        "Authorization" : f"Bearer {token}",
+        "Authorization": f"Bearer {token}",
         "Content-type": "application/json"
     }
 
     data = {
         "messaging_product": "whatsapp",
         "recipient_type": "individual",
-        "to": user,
+        "to": recipient_phone,
         "type": "text",
-    
         "text": {
-            "body": "Hey i am sending this msg from vscode lol. " # use body to send msgs 
+            "body": message_text
         }
     }
     
@@ -404,3 +413,38 @@ send_template_to_group(
     header_media_type="image"
 )
 """
+
+async def send_txt_msg_async(recipient_phone: str, message_text: str):
+    """
+    Simple async version of send_txt_msg for better performance.
+    
+    Args:
+        recipient_phone: The recipient's phone number (with country code)
+        message_text: The message content to send
+        
+    Returns:
+        httpx.Response: The API response
+    """
+    import httpx
+    
+    url = f"https://graph.facebook.com/{version}/{number_id}/messages"
+
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "Content-type": "application/json"
+    }
+
+    data = {
+        "messaging_product": "whatsapp",
+        "recipient_type": "individual",
+        "to": recipient_phone,
+        "type": "text",
+        "text": {
+            "body": message_text
+        }
+    }
+    
+    # Simple async client with reasonable timeout
+    async with httpx.AsyncClient(timeout=30.0) as client:
+        response = await client.post(url=url, headers=headers, json=data)
+        return response
