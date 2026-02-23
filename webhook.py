@@ -83,9 +83,11 @@ async def webhook(request: Request, background_tasks: BackgroundTasks, db: Sessi
         
         logger.info(f"Webhook received from {wa_id} ({name})")
         
-        # Create new lead if doesn't exist
-        if wa_id and not db.query(Lead).filter(Lead.phone == wa_id).first():
-            try:
+        # Create new lead if doesn't exist or update thread_id if empty
+        if wa_id:
+            existing_lead = db.query(Lead).filter(Lead.phone == wa_id).first()
+            if not existing_lead:
+                try:
                 from openai import OpenAI
                 openai_client = OpenAI()
                 new_conv = openai_client.conversations.create()
@@ -95,7 +97,16 @@ async def webhook(request: Request, background_tasks: BackgroundTasks, db: Sessi
                 logger.info(f"New lead created: {wa_id}")
             except Exception as e:
                 logger.error(f"Error creating lead for {wa_id}: {str(e)}")
-
+            elif not existing_lead.thread_id:
+                try:
+                    from openai import OpenAI
+                    openai_client = OpenAI()
+                    new_conv = openai_client.conversations.create()
+                    existing_lead.thread_id = new_conv.id
+                    db.commit()
+                    logger.info(f"Thread ID updated for existing lead: {wa_id}")
+                except Exception as e:
+                    logger.error(f"Error updating thread_id for {wa_id}: {str(e)}")
         # Extract message
         message = body.get("entry", [{}])[0].get("changes", [{}])[0].get("value", {}).get("messages", [{}])[0]
 
