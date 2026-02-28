@@ -88,15 +88,15 @@ async def webhook(request: Request, background_tasks: BackgroundTasks, db: Sessi
             existing_lead = db.query(Lead).filter(Lead.phone == wa_id).first()
             if not existing_lead:
                 try:
-                from openai import OpenAI
-                openai_client = OpenAI()
-                new_conv = openai_client.conversations.create()
-                new_lead = Lead(phone=wa_id, name=name, thread_id=new_conv.id)
-                db.add(new_lead)
-                db.commit()
-                logger.info(f"New lead created: {wa_id}")
-            except Exception as e:
-                logger.error(f"Error creating lead for {wa_id}: {str(e)}")
+                    from openai import OpenAI
+                    openai_client = OpenAI()
+                    new_conv = openai_client.conversations.create()
+                    new_lead = Lead(phone=wa_id, name=name, thread_id=new_conv.id)
+                    db.add(new_lead)
+                    db.commit()
+                    logger.info(f"New lead created: {wa_id}")
+                except Exception as e:
+                    logger.error(f"Error creating lead for {wa_id}: {str(e)}")
             elif not existing_lead.thread_id:
                 try:
                     from openai import OpenAI
