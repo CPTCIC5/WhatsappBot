@@ -189,4 +189,4 @@ admin.add_view(TemplateStorageAdmin)
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app)
+    uvicorn.run(app, port=8000)
