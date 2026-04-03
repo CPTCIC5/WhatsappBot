@@ -11,7 +11,7 @@ from send_msg import send_img
 load_dotenv()
 api = os.getenv("OPENAI_API_KEY")
 client = OpenAI(api_key=api)
-model = "gpt-5"
+model = "gpt-5.4"
 
 class Product(BaseModel):
     name: str | None = None
