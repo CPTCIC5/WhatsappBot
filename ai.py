@@ -27,12 +27,25 @@ class Product(BaseModel):
 class Products(BaseModel):
     products: list[Product]
 
+def _resolve_product_image(p: ProductModel) -> str | None:
+    """Return a usable image URL for a product: the primary image_url if set,
+    otherwise its first uploaded image. Blob names are turned into SAS URLs."""
+    import azure_storage
+
+    if p.image_url:
+        return azure_storage.resolve_url(p.image_url)
+    images = getattr(p, "images", None) or []
+    if images:
+        return azure_storage.resolve_url(images[0].blob_name)
+    return None
+
+
 def _products_to_response(products: list[ProductModel]) -> dict:
     """Convert DB product rows to Products schema dict."""
     products_list = [
         Product(
             name=p.name,
-            image_url=p.image_url,
+            image_url=_resolve_product_image(p),
             gross_weight=p.gross_weight,
             metal_info=str(p.metal_info) if p.metal_info else None,
             calculated_amount=p.calculated_amount,

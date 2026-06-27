@@ -2,12 +2,24 @@ from db.models import Product, Metal, Lead, Group, TemplateStorage, Referral, Fe
 from sqladmin import ModelView, action
 from starlette.requests import Request
 from starlette.responses import RedirectResponse
-from wtforms import Form, TextAreaField, validators
+from starlette.datastructures import UploadFile as StarletteUploadFile
+from wtforms import Form, TextAreaField, FileField, validators
+from markupsafe import Markup
 import os
 import requests
 from dotenv import load_dotenv
 
+import azure_storage
+
 load_dotenv()
+
+
+def _image_cell(blob_or_url):
+    """Render a small thumbnail (or '—') for a stored blob name / URL."""
+    url = azure_storage.resolve_url(blob_or_url)
+    if not url:
+        return "—"
+    return Markup(f'<img src="{url}" style="height:48px;border-radius:6px" />')
 
 class MetalAdmin(ModelView, model=Metal):
     name = "Metal"
@@ -65,13 +77,36 @@ class ProductAdmin(ModelView, model=Product):
         "metal_info": "Metal",
         "categories": "Categories",
         "availability": "Available",
+        "image_url": "Image",
     }
-    
-    
+
+    # Upload the image as a file (stored in Azure); the DB keeps the blob name.
+    form_overrides = {"image_url": FileField}
+
     column_formatters = {
         "gross_weight": lambda m, a: f"{m.gross_weight:.3f}" if m.gross_weight else "0.000",
-        "calculated_amount": lambda m, a: f"₹{m.calculated_amount:,.2f}" if m.calculated_amount else "₹0.00"
+        "calculated_amount": lambda m, a: f"₹{m.calculated_amount:,.2f}" if m.calculated_amount else "₹0.00",
+        "image_url": lambda m, a: _image_cell(m.image_url),
     }
+    column_formatters_detail = {
+        "image_url": lambda m, a: _image_cell(m.image_url),
+    }
+
+    async def on_model_change(self, data, model, is_created, request):
+        """Upload a newly chosen image file to Azure and store its blob name."""
+        upload = data.get("image_url")
+        if isinstance(upload, StarletteUploadFile) and upload.filename:
+            content = await upload.read()
+            old = getattr(model, "image_url", None)
+            data["image_url"] = azure_storage.upload_image(
+                content, upload.content_type, prefix="products/"
+            )
+            if old and not is_created:
+                azure_storage.delete_blob(old)
+        else:
+            # No new file chosen: keep existing value, don't overwrite with empty.
+            data["image_url"] = None if is_created else getattr(model, "image_url", None)
+
 
 class LeadAdmin(ModelView, model=Lead):
     name = "Lead"

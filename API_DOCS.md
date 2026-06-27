@@ -6,7 +6,8 @@ REST APIs for the catalogue website (feedback, chatbot, categories, reviews, blo
 
 - **Base URL:** `https://<host>` (local dev tunnel: `https://monitor-happy-mole.ngrok-free.app`)
 - All endpoints are prefixed with **`/api`**.
-- Request and response bodies are **JSON** (`Content-Type: application/json`).
+- Request bodies are **JSON** (`Content-Type: application/json`) **except endpoints that accept image uploads** (Items, Blogs create/update), which use **`multipart/form-data`**. Responses are always JSON.
+- **Images:** uploads go to Azure Blob Storage. Responses return **time-limited signed (SAS) URLs** (valid ~1 year, regenerated on every read). Don't cache image URLs long-term — re-fetch the resource to get a fresh URL. Allowed types: `jpeg, png, webp, gif`.
 - Timestamps are ISO-8601 UTC strings (e.g. `2026-06-27T18:13:18.831614`).
 - No authentication is required on these endpoints (the admin panel at `/admin` is separate).
 - Trailing slash: endpoints are written **without** a trailing slash (e.g. `POST /api/feedback`). The chatbot accepts both `/api/chat` and `/api/chat/`.
@@ -255,31 +256,131 @@ POST /api/reviews
 
 ---
 
-## 5. Blogs — `/api/blogs`
+## 5. Blogs — `/api/blogs`  *(create/update use form-data)*
 
-### Object
+### Object (response)
 
 | Field | Type | Notes |
 |-------|------|-------|
 | `id` | int | read-only |
 | `heading` | string | required, 1–200 chars |
 | `description` | string \| null | optional |
+| `image_url` | string \| null | signed URL of the cover image (or `null`) |
 | `created_at` | datetime | read-only |
 
 ### Endpoints
 
-| Method | Path | Description |
-|--------|------|-------------|
-| `POST` | `/api/blogs` | Create → `201` |
-| `GET` | `/api/blogs` | List (params: `skip`=0, `limit`=50/max 200; sorted newest first) |
-| `GET` | `/api/blogs/{id}` | Get one |
-| `PATCH` | `/api/blogs/{id}` | Update |
-| `DELETE` | `/api/blogs/{id}` | Delete → `204` |
+| Method | Path | Body | Description |
+|--------|------|------|-------------|
+| `POST` | `/api/blogs` | `multipart/form-data` | Create → `201` |
+| `GET` | `/api/blogs` | — | List (`skip`=0, `limit`=50/max 200; newest first) |
+| `GET` | `/api/blogs/{id}` | — | Get one |
+| `PATCH` | `/api/blogs/{id}` | `multipart/form-data` | Update (send only fields you change) |
+| `DELETE` | `/api/blogs/{id}` | — | Delete → `204` (also deletes the image) |
 
-```http
-POST /api/blogs
-{ "heading": "Festive Collection 2026", "description": "Our new Diwali drop ..." }
+**Form fields (POST/PATCH):** `heading` (text), `description` (text, optional), `image` (file, optional).
+
+```js
+const fd = new FormData();
+fd.append("heading", "Festive Collection 2026");
+fd.append("description", "Our new Diwali drop ...");
+fd.append("image", fileInput.files[0]);   // optional
+await fetch("/api/blogs", { method: "POST", body: fd });
 ```
+
+```json
+{
+  "heading": "Festive Collection 2026",
+  "description": "Our new Diwali drop ...",
+  "id": 4,
+  "image_url": "https://ridra.blob.core.windows.net/catalogue-images/blogs/ab12...jpg?<sas>",
+  "created_at": "2026-06-28T10:00:00.000000"
+}
+```
+
+> Don't set `Content-Type` manually when sending `FormData` — the browser adds the multipart boundary.
+
+---
+
+## 6. Items (Products) — `/api/items`  *(create/update use form-data)*
+
+Catalogue items with multiple images.
+
+### Object (response)
+
+| Field | Type | Notes |
+|-------|------|-------|
+| `id` | int | read-only |
+| `name` | string | |
+| `style_no` | string \| null | |
+| `jewel_code` | string \| null | SKU code |
+| `description` | string \| null | |
+| `gross_weight` | number \| null | grams |
+| `availability` | bool | |
+| `metal_id` | int \| null | |
+| `metal` | object \| null | `{ id, metal, karat, rate_per_gram }` |
+| `calculated_amount` | number | `gross_weight × metal.rate_per_gram` (₹) |
+| `categories` | array | `[{ id, name }]` |
+| `images` | array | `[{ id, url }]` — `url` is a signed URL; `id` is used to delete an image (`null` for the legacy admin image) |
+
+### Endpoints
+
+| Method | Path | Body | Description |
+|--------|------|------|-------------|
+| `POST` | `/api/items` | `multipart/form-data` | Create → `201` |
+| `GET` | `/api/items` | — | List (filters below) |
+| `GET` | `/api/items/{id}` | — | Get one |
+| `PATCH` | `/api/items/{id}` | `multipart/form-data` | Update (partial; new images are **appended**) |
+| `DELETE` | `/api/items/{id}` | — | Delete item + all its images → `204` |
+| `DELETE` | `/api/items/{id}/images/{image_id}` | — | Remove a single image → `204` |
+
+**List query params:** `name` (partial match), `metal` (e.g. `Gold`), `category_id`, `available` (`true`/`false`), `skip` (0), `limit` (50/max 200).
+
+**Form fields (POST/PATCH):**
+
+| Field | Type | Notes |
+|-------|------|-------|
+| `name` | text | required on create |
+| `style_no`, `jewel_code`, `description` | text | optional |
+| `gross_weight` | number | optional |
+| `metal_id` | int | optional; must exist (else `400`) |
+| `availability` | bool | `true`/`false` (default `true`) |
+| `category_ids` | int (repeatable) | repeat the field per category; all must exist (else `400`) |
+| `images` | file (repeatable) | repeat the field per image |
+
+```js
+const fd = new FormData();
+fd.append("name", "Rose Gold Necklace");
+fd.append("metal_id", "1");
+fd.append("gross_weight", "8.5");
+fd.append("category_ids", "1");
+fd.append("category_ids", "3");          // multiple categories
+fd.append("images", file1);
+fd.append("images", file2);              // multiple images
+await fetch("/api/items", { method: "POST", body: fd });
+```
+
+```json
+{
+  "id": 12,
+  "name": "Rose Gold Necklace",
+  "style_no": null,
+  "jewel_code": null,
+  "description": null,
+  "gross_weight": 8.5,
+  "availability": true,
+  "metal_id": 1,
+  "metal": { "id": 1, "metal": "Gold", "karat": "22K", "rate_per_gram": 6000 },
+  "calculated_amount": 51000.0,
+  "categories": [{ "id": 1, "name": "Necklaces" }],
+  "images": [
+    { "id": 7, "url": "https://ridra.blob.core.windows.net/catalogue-images/products/...jpg?<sas>" }
+  ]
+}
+```
+
+> **Adding images to an existing item:** `PATCH /api/items/{id}` with `images` files — they're appended.
+> **Removing one image:** take the image's `id` from the `images` array, then `DELETE /api/items/{id}/images/{image_id}`.
 
 ---
 
@@ -297,5 +398,4 @@ FastAPI auto-generates live, try-it-out docs while the server is running:
 
 These appear in the design but have no REST API yet — ping the backend if the frontend needs them:
 
-- `GET/POST /api/items` — items/products CRUD (managed via admin panel for now).
 - `/api/referral/{user_id}` + the `/referral/{username}` web forum (wa.me intent flow).

@@ -49,6 +49,7 @@ class Product(Base):
     metal_info = relationship("Metal", back_populates="products")
     categories = relationship("Category", secondary="product_categories", back_populates="products")
     reviews = relationship("Review", back_populates="product", cascade="all, delete-orphan")
+    images = relationship("ProductImage", back_populates="product", cascade="all, delete-orphan")
 
     @property
     def calculated_amount(self):
@@ -82,6 +83,22 @@ class Category(Base):
         return self.name
 
 
+class ProductImage(Base):
+    """One image for a product. Stores the Azure blob name (not a public URL)."""
+
+    __tablename__ = "product_images"
+
+    id = Column(Integer, primary_key=True, index=True)
+    product_id = Column(Integer, ForeignKey("products.id"), nullable=False, index=True)
+    blob_name = Column(String, nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    product = relationship("Product", back_populates="images")
+
+    def __repr__(self):
+        return self.blob_name
+
+
 class Review(Base):
     """A customer review for a catalogue item (product)."""
 
@@ -107,6 +124,8 @@ class Blog(Base):
     id = Column(Integer, primary_key=True, index=True)
     heading = Column(String, nullable=False, index=True)
     description = Column(Text, nullable=True)
+    # Azure blob name for the blog's cover image (resolved to a SAS URL on read)
+    image_blob = Column(String, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
 
     def __repr__(self):

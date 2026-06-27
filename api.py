@@ -2,10 +2,11 @@
 
 import logging
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form
 from sqlalchemy.orm import Session
 
-from db.models import get_db, Feedback, Product, Category, Review, Blog
+import azure_storage
+from db.models import get_db, Feedback, Product, Category, Review, Blog, ProductImage, Metal
 from schemas import (
     FeedbackCreate,
     FeedbackUpdate,
@@ -21,6 +22,7 @@ from schemas import (
     BlogCreate,
     BlogUpdate,
     BlogOut,
+    ItemOut,
 )
 
 logger = logging.getLogger(__name__)
@@ -236,25 +238,59 @@ def delete_review(review_id: int, db: Session = Depends(get_db)):
     return None
 
 
-# --- Blogs CRUD --------------------------------------------------------------
+# --- Image upload helper -----------------------------------------------------
+
+async def _store_upload(file: UploadFile, prefix: str) -> str:
+    """Validate, read and upload an image file. Returns the stored blob name."""
+    data = await file.read()
+    if not data:
+        raise HTTPException(status_code=422, detail="Uploaded file is empty")
+    try:
+        return azure_storage.upload_image(data, file.content_type, prefix=prefix)
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail=str(e))
+    except Exception as e:
+        logger.error(f"Image upload failed: {e}")
+        raise HTTPException(status_code=502, detail="Image upload failed")
+
+
+# --- Blogs CRUD (form-data: optional cover image) ---------------------------
 
 blog_router = APIRouter(prefix="/blogs", tags=["blogs"])
 
 
+def _serialize_blog(blog: Blog) -> BlogOut:
+    return BlogOut(
+        id=blog.id,
+        heading=blog.heading,
+        description=blog.description,
+        image_url=azure_storage.resolve_url(blog.image_blob),
+        created_at=blog.created_at,
+    )
+
+
 @blog_router.post("", response_model=BlogOut, status_code=201)
-def create_blog(payload: BlogCreate, db: Session = Depends(get_db)):
-    blog = Blog(**payload.model_dump())
+async def create_blog(
+    heading: str = Form(..., min_length=1, max_length=200),
+    description: str | None = Form(None),
+    image: UploadFile | None = File(None),
+    db: Session = Depends(get_db),
+):
+    blog = Blog(heading=heading, description=description)
+    if image is not None:
+        blog.image_blob = await _store_upload(image, prefix="blogs/")
     db.add(blog)
     db.commit()
     db.refresh(blog)
-    return blog
+    return _serialize_blog(blog)
 
 
 @blog_router.get("", response_model=list[BlogOut])
 def list_blogs(skip: int = 0, limit: int = 50, db: Session = Depends(get_db)):
-    return (
+    blogs = (
         db.query(Blog).order_by(Blog.created_at.desc()).offset(skip).limit(min(limit, 200)).all()
     )
+    return [_serialize_blog(b) for b in blogs]
 
 
 @blog_router.get("/{blog_id}", response_model=BlogOut)
@@ -262,19 +298,32 @@ def get_blog(blog_id: int, db: Session = Depends(get_db)):
     blog = db.query(Blog).filter(Blog.id == blog_id).first()
     if not blog:
         raise HTTPException(status_code=404, detail="Blog not found")
-    return blog
+    return _serialize_blog(blog)
 
 
 @blog_router.patch("/{blog_id}", response_model=BlogOut)
-def update_blog(blog_id: int, payload: BlogUpdate, db: Session = Depends(get_db)):
+async def update_blog(
+    blog_id: int,
+    heading: str | None = Form(None, min_length=1, max_length=200),
+    description: str | None = Form(None),
+    image: UploadFile | None = File(None),
+    db: Session = Depends(get_db),
+):
     blog = db.query(Blog).filter(Blog.id == blog_id).first()
     if not blog:
         raise HTTPException(status_code=404, detail="Blog not found")
-    for key, value in payload.model_dump(exclude_unset=True).items():
-        setattr(blog, key, value)
+    if heading is not None:
+        blog.heading = heading
+    if description is not None:
+        blog.description = description
+    if image is not None:
+        old = blog.image_blob
+        blog.image_blob = await _store_upload(image, prefix="blogs/")
+        if old:
+            azure_storage.delete_blob(old)
     db.commit()
     db.refresh(blog)
-    return blog
+    return _serialize_blog(blog)
 
 
 @blog_router.delete("/{blog_id}", status_code=204)
@@ -282,7 +331,197 @@ def delete_blog(blog_id: int, db: Session = Depends(get_db)):
     blog = db.query(Blog).filter(Blog.id == blog_id).first()
     if not blog:
         raise HTTPException(status_code=404, detail="Blog not found")
+    if blog.image_blob:
+        azure_storage.delete_blob(blog.image_blob)
     db.delete(blog)
+    db.commit()
+    return None
+
+
+# --- Items (products) CRUD (form-data: multiple images) ----------------------
+
+item_router = APIRouter(prefix="/items", tags=["items"])
+
+
+def _serialize_item(p: Product) -> ItemOut:
+    images = []
+    # Legacy single image_url (set via admin) has no ProductImage id.
+    if p.image_url:
+        u = azure_storage.resolve_url(p.image_url)
+        if u:
+            images.append({"id": None, "url": u})
+    for img in p.images:
+        u = azure_storage.resolve_url(img.blob_name)
+        if u:
+            images.append({"id": img.id, "url": u})
+
+    return ItemOut(
+        id=p.id,
+        name=p.name,
+        style_no=p.style_no,
+        jewel_code=p.jewel_code,
+        description=p.description,
+        gross_weight=p.gross_weight,
+        availability=p.availability,
+        metal_id=p.metal_id,
+        metal=p.metal_info,
+        calculated_amount=p.calculated_amount,
+        categories=p.categories,
+        images=images,
+    )
+
+
+def _apply_categories(db: Session, product: Product, category_ids: list[int]) -> None:
+    cats = db.query(Category).filter(Category.id.in_(category_ids)).all()
+    found = {c.id for c in cats}
+    missing = set(category_ids) - found
+    if missing:
+        raise HTTPException(status_code=400, detail=f"Unknown category id(s): {sorted(missing)}")
+    product.categories = cats
+
+
+@item_router.post("", response_model=ItemOut, status_code=201)
+async def create_item(
+    name: str = Form(..., min_length=1),
+    style_no: str | None = Form(None),
+    jewel_code: str | None = Form(None),
+    description: str | None = Form(None),
+    gross_weight: float | None = Form(None),
+    metal_id: int | None = Form(None),
+    availability: bool = Form(True),
+    category_ids: list[int] = Form([]),
+    images: list[UploadFile] = File([]),
+    db: Session = Depends(get_db),
+):
+    if metal_id is not None and not db.query(Metal).filter(Metal.id == metal_id).first():
+        raise HTTPException(status_code=400, detail=f"Metal {metal_id} not found")
+
+    product = Product(
+        name=name,
+        style_no=style_no,
+        jewel_code=jewel_code,
+        description=description,
+        gross_weight=gross_weight,
+        metal_id=metal_id,
+        availability=availability,
+    )
+    if category_ids:
+        _apply_categories(db, product, category_ids)
+    db.add(product)
+    db.flush()
+
+    for f in images:
+        if f and f.filename:
+            blob = await _store_upload(f, prefix="products/")
+            db.add(ProductImage(product_id=product.id, blob_name=blob))
+
+    db.commit()
+    db.refresh(product)
+    return _serialize_item(product)
+
+
+@item_router.get("", response_model=list[ItemOut])
+def list_items(
+    name: str | None = None,
+    metal: str | None = None,
+    category_id: int | None = None,
+    available: bool | None = None,
+    skip: int = 0,
+    limit: int = 50,
+    db: Session = Depends(get_db),
+):
+    query = db.query(Product)
+    if name:
+        query = query.filter(Product.name.ilike(f"%{name}%"))
+    if metal:
+        query = query.join(Product.metal_info).filter(Metal.metal.ilike(f"%{metal}%"))
+    if category_id is not None:
+        query = query.filter(Product.categories.any(Category.id == category_id))
+    if available is not None:
+        query = query.filter(Product.availability == available)
+    items = query.offset(skip).limit(min(limit, 200)).all()
+    return [_serialize_item(p) for p in items]
+
+
+@item_router.get("/{item_id}", response_model=ItemOut)
+def get_item(item_id: int, db: Session = Depends(get_db)):
+    product = db.query(Product).filter(Product.id == item_id).first()
+    if not product:
+        raise HTTPException(status_code=404, detail="Item not found")
+    return _serialize_item(product)
+
+
+@item_router.patch("/{item_id}", response_model=ItemOut)
+async def update_item(
+    item_id: int,
+    name: str | None = Form(None, min_length=1),
+    style_no: str | None = Form(None),
+    jewel_code: str | None = Form(None),
+    description: str | None = Form(None),
+    gross_weight: float | None = Form(None),
+    metal_id: int | None = Form(None),
+    availability: bool | None = Form(None),
+    category_ids: list[int] | None = Form(None),
+    images: list[UploadFile] = File([]),
+    db: Session = Depends(get_db),
+):
+    product = db.query(Product).filter(Product.id == item_id).first()
+    if not product:
+        raise HTTPException(status_code=404, detail="Item not found")
+
+    if name is not None:
+        product.name = name
+    if style_no is not None:
+        product.style_no = style_no
+    if jewel_code is not None:
+        product.jewel_code = jewel_code
+    if description is not None:
+        product.description = description
+    if gross_weight is not None:
+        product.gross_weight = gross_weight
+    if availability is not None:
+        product.availability = availability
+    if metal_id is not None:
+        if not db.query(Metal).filter(Metal.id == metal_id).first():
+            raise HTTPException(status_code=400, detail=f"Metal {metal_id} not found")
+        product.metal_id = metal_id
+    if category_ids is not None:
+        _apply_categories(db, product, category_ids)
+
+    # New images are appended (existing ones are kept; remove via the image endpoint).
+    for f in images:
+        if f and f.filename:
+            blob = await _store_upload(f, prefix="products/")
+            db.add(ProductImage(product_id=product.id, blob_name=blob))
+
+    db.commit()
+    db.refresh(product)
+    return _serialize_item(product)
+
+
+@item_router.delete("/{item_id}", status_code=204)
+def delete_item(item_id: int, db: Session = Depends(get_db)):
+    product = db.query(Product).filter(Product.id == item_id).first()
+    if not product:
+        raise HTTPException(status_code=404, detail="Item not found")
+    for img in product.images:
+        azure_storage.delete_blob(img.blob_name)
+    db.delete(product)
+    db.commit()
+    return None
+
+
+@item_router.delete("/{item_id}/images/{image_id}", status_code=204)
+def delete_item_image(item_id: int, image_id: int, db: Session = Depends(get_db)):
+    img = (
+        db.query(ProductImage)
+        .filter(ProductImage.id == image_id, ProductImage.product_id == item_id)
+        .first()
+    )
+    if not img:
+        raise HTTPException(status_code=404, detail="Image not found")
+    azure_storage.delete_blob(img.blob_name)
+    db.delete(img)
     db.commit()
     return None
 
@@ -292,3 +531,4 @@ api_router.include_router(chat_router)
 api_router.include_router(category_router)
 api_router.include_router(review_router)
 api_router.include_router(blog_router)
+api_router.include_router(item_router)

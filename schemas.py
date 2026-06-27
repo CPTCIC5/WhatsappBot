@@ -119,6 +119,39 @@ class BlogUpdate(BaseModel):
 
 
 class BlogOut(BlogBase):
+    id: int
+    image_url: Optional[str] = None
+    created_at: Optional[datetime] = None
+
+
+# --- Items (products) --------------------------------------------------------
+
+class ItemMetalOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
     id: int
-    created_at: Optional[datetime] = None
+    metal: Optional[str] = None
+    karat: Optional[str] = None
+    rate_per_gram: Optional[float] = None
+
+
+class ItemImageOut(BaseModel):
+    # id is null for the legacy single image set via the admin panel; images
+    # added through the API have an id you can use to delete them individually.
+    id: Optional[int] = None
+    url: str
+
+
+class ItemOut(BaseModel):
+    id: int
+    name: Optional[str] = None
+    style_no: Optional[str] = None
+    jewel_code: Optional[str] = None
+    description: Optional[str] = None
+    gross_weight: Optional[float] = None
+    availability: bool = True
+    metal_id: Optional[int] = None
+    metal: Optional[ItemMetalOut] = None
+    calculated_amount: float = 0.0
+    categories: list[CategoryOut] = []
+    images: list[ItemImageOut] = []
+
