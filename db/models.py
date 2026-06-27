@@ -47,6 +47,8 @@ class Product(Base):
     availability = Column(Boolean, default=True, nullable=False)
 
     metal_info = relationship("Metal", back_populates="products")
+    categories = relationship("Category", secondary="product_categories", back_populates="products")
+    reviews = relationship("Review", back_populates="product", cascade="all, delete-orphan")
 
     @property
     def calculated_amount(self):
@@ -57,6 +59,58 @@ class Product(Base):
 
     def __repr__(self):
         return self.name
+
+
+# Association table for Product <-> Category (many-to-many)
+product_categories = Table(
+    "product_categories",
+    Base.metadata,
+    Column("product_id", Integer, ForeignKey("products.id"), primary_key=True),
+    Column("category_id", Integer, ForeignKey("categories.id"), primary_key=True),
+)
+
+
+class Category(Base):
+    __tablename__ = "categories"
+
+    id = Column(Integer, primary_key=True, index=True)
+    name = Column(String, index=True, nullable=False)
+
+    products = relationship("Product", secondary="product_categories", back_populates="categories")
+
+    def __repr__(self):
+        return self.name
+
+
+class Review(Base):
+    """A customer review for a catalogue item (product)."""
+
+    __tablename__ = "reviews"
+
+    id = Column(Integer, primary_key=True, index=True)
+    product_id = Column(Integer, ForeignKey("products.id"), nullable=False, index=True)
+    rating = Column(Float, nullable=False)  # out of 5
+    name = Column(String, nullable=False)
+    email = Column(String, nullable=True)
+    description = Column(Text, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    product = relationship("Product", back_populates="reviews")
+
+    def __repr__(self):
+        return f"Review #{self.id} ({self.rating}/5)"
+
+
+class Blog(Base):
+    __tablename__ = "blogs"
+
+    id = Column(Integer, primary_key=True, index=True)
+    heading = Column(String, nullable=False, index=True)
+    description = Column(Text, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    def __repr__(self):
+        return self.heading
     
 
 
@@ -81,9 +135,71 @@ class Lead(Base):
     phone = Column(String, unique=True, index=True)
     created_at = Column(DateTime,  default=datetime.utcnow)
 
+    # --- Milestone 3: onboarding + referrals ---
+    # Onboarding journey state: new -> welcomed -> engaged
+    onboarding_state = Column(
+        Enum("new", "welcomed", "engaged", name="onboarding_states"),
+        default="new",
+        nullable=False,
+    )
+    # Unique code this customer shares to refer others
+    referral_code = Column(String, unique=True, index=True, nullable=True)
+    # Tracks a short multi-step intent (e.g. "awaiting_referral" while we wait
+    # for the customer to send the friend's contact/number to refer)
+    pending_intent = Column(String, nullable=True)
+
     groups = relationship("Group", secondary=group_leads, back_populates="leads")
+
+    # Referrals this customer has made (they are the referrer)
+    referrals_given = relationship(
+        "Referral",
+        foreign_keys="Referral.referrer_id",
+        back_populates="referrer",
+    )
+
     def __repr__(self):
         return self.name
+
+
+class Referral(Base):
+    """A referral made by an existing customer (referrer) toward a new person.
+
+    Supports referral chains ("referrals from referrals") via parent_referral_id,
+    so an admin can view the full tree of who referred whom.
+    """
+
+    __tablename__ = "referrals"
+
+    id = Column(Integer, primary_key=True, index=True)
+    # The existing customer who made the referral
+    referrer_id = Column(Integer, ForeignKey("leads.id"), nullable=False, index=True)
+    # The new lead once they join via this referral (filled on acceptance)
+    referred_lead_id = Column(Integer, ForeignKey("leads.id"), nullable=True, index=True)
+    # Details of the referred person, captured at referral time
+    referred_phone = Column(String, nullable=True, index=True)
+    referred_name = Column(String, nullable=True)
+    # The referrer's code that was used for this referral
+    referral_code = Column(String, index=True, nullable=True)
+    status = Column(
+        Enum("pending", "accepted", name="referral_status"),
+        default="pending",
+        nullable=False,
+    )
+    # If the referrer themselves joined via a referral, link that referral here
+    parent_referral_id = Column(Integer, ForeignKey("referrals.id"), nullable=True, index=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    accepted_at = Column(DateTime, nullable=True)
+
+    referrer = relationship("Lead", foreign_keys=[referrer_id], back_populates="referrals_given")
+    referred_lead = relationship("Lead", foreign_keys=[referred_lead_id])
+    parent_referral = relationship(
+        "Referral",
+        remote_side=[id],
+        backref="child_referrals",
+    )
+
+    def __repr__(self):
+        return f"Referral #{self.id} ({self.status})"
 
 
 class Group(Base):
@@ -121,3 +237,32 @@ class TemplateStorage(Base):
 
     def __str__(self):
         return self.template_name
+
+
+class Feedback(Base):
+    """Customer feedback collected via the website feedback forum."""
+
+    __tablename__ = "feedback"
+
+    id = Column(Integer, primary_key=True, index=True)
+    name = Column(String, index=True, nullable=False)
+    phone = Column(String, index=True, nullable=False)
+    # How the customer felt about the experience
+    experience = Column(
+        Enum("happy", "medium", "sad", name="feedback_experience"),
+        nullable=False,
+    )
+    # What the feedback is about
+    feedback_type = Column(
+        Enum("product_purchased", "staff_experience", "activities", name="feedback_type"),
+        nullable=False,
+    )
+    # Optional product the feedback relates to (selectable)
+    product_id = Column(Integer, ForeignKey("products.id"), nullable=True, index=True)
+    description = Column(Text, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    product = relationship("Product")
+
+    def __repr__(self):
+        return f"Feedback #{self.id} ({self.experience})"

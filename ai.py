@@ -13,6 +13,9 @@ api = os.getenv("OPENAI_API_KEY")
 client = OpenAI(api_key=api)
 model = "gpt-5.4"
 
+# Contact for queries the bot can't resolve (big/complex questions).
+CONTACT_EMAIL = os.getenv("CONTACT_EMAIL", "support@ridra.in")
+
 class Product(BaseModel):
     name: str | None = None
     gross_weight: float | None = None
@@ -278,6 +281,25 @@ PRODUCT_TOOLS = [
         },
         "strict": True,
     },
+    {
+        "type": "function",
+        "name": "escalate_to_human",
+        "description": (
+            "Escalate to a human team member. Use ONLY when the query is large/complex, "
+            "needs custom-order or pricing negotiation, a complaint, or anything you cannot "
+            "confidently resolve with the product tools. Returns a message that shares the "
+            "store's contact email so the customer can reach the team."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "reason": {"type": "string", "description": "Short reason for escalating (internal note)."},
+            },
+            "required": ["reason"],
+            "additionalProperties": False,
+        },
+        "strict": True,
+    },
 ]
 
 
@@ -314,6 +336,15 @@ def _handle_tool_call(db: Session, name: str, arguments: dict, user_phone: str |
                     out = {"success": True, "message": "Image sent successfully", "response": response.json()}
                 else:
                     out = {"success": False, "error": f"Failed to send image: {response.status_code}", "response": response.json()}
+        elif name == "escalate_to_human":
+            out = {
+                "escalated": True,
+                "message": (
+                    f"This one is best handled by our team 💎 Please email us at {CONTACT_EMAIL} "
+                    "with your question and we'll get right back to you. You can keep chatting "
+                    "here for anything else!"
+                ),
+            }
         else:
             out = {"error": f"Unknown tool: {name}"}
         return json.dumps(out, default=str)
@@ -365,6 +396,12 @@ def chat_with_assistant(lead_id: int | None, content: str) -> str:
             "- When showing products, focus on the life moment it represents\n"
             "- Send images when they want to see something specific\n"
             "- Keep descriptions about feelings and occasions, not just specifications\n\n"
+            "RESOLVING QUERIES (Milestone 3):\n"
+            "- Prefer short, predefined-style answers. Resolve small/common questions yourself "
+            "(rates, availability, store info, product details) using the tools.\n"
+            "- If a query is big, complex, or open-ended (custom orders, pricing negotiation, "
+            "complaints, anything you can't confidently resolve), call escalate_to_human and "
+            "relay its message so they can email the team. Do NOT invent answers.\n\n"
             "Remember: You're here to help them discover jewelry that tells their story. Connect pieces to their emotions and life moments."
         )
         tools = [{"type": "web_search", "filters": {"allowed_domains": ["ridra.in"]}}] + PRODUCT_TOOLS
@@ -433,5 +470,76 @@ def chat_with_assistant(lead_id: int | None, content: str) -> str:
                 create_kw["input"] = input_list + list(resp.output) + tool_outputs
                 input_list = create_kw["input"]
         return (resp.output_text or "") if resp else ""
+    finally:
+        db.close()
+
+
+# --- Website chatbot (session-based, no WhatsApp) ---------------------------
+
+WEB_INSTRUCTION = (
+    "You are the website assistant for *Ridra Jewellers*. Answer visitors' basic "
+    "queries clearly and concisely (2-4 sentences).\n\n"
+    "- Use the product tools to look up items by name, metal, karat, price, or "
+    "availability, and share accurate details.\n"
+    "- Be warm and helpful; focus on the occasion and story behind the jewelry.\n"
+    "- For big/complex requests (custom orders, negotiations, complaints) or "
+    f"anything you can't resolve, call escalate_to_human (shares {CONTACT_EMAIL}).\n"
+    "- Never invent product or price details."
+)
+
+# Web chat reuses the product query tools but not WhatsApp image sending.
+WEB_TOOLS = [t for t in PRODUCT_TOOLS if t.get("name") != "send_product_image"]
+
+
+def chat_web(message: str, session_id: str | None = None) -> tuple[str, str]:
+    """Website chatbot. Session is stateless: `session_id` is the OpenAI
+    conversation id. Returns (reply_text, session_id).
+
+    Pass session_id=None on the first message; the returned session_id should be
+    sent back on subsequent messages to keep conversation context.
+    """
+    # Resolve or create the conversation that backs this session.
+    conversation_id = session_id
+    if not conversation_id:
+        conversation_id = client.conversations.create().id
+
+    tools = [{"type": "web_search", "filters": {"allowed_domains": ["ridra.in"]}}] + WEB_TOOLS
+
+    db = SessionLocal()
+    try:
+        create_kw: dict = {
+            "model": model,
+            "instructions": WEB_INSTRUCTION,
+            "input": [{"role": "user", "content": message}],
+            "tools": tools,
+            "conversation": conversation_id,
+        }
+
+        max_rounds = 5
+        resp = None
+        for _ in range(max_rounds):
+            resp = client.responses.create(**create_kw)
+            tool_outputs = []
+            for item in resp.output:
+                if getattr(item, "type", None) != "function_call":
+                    continue
+                name = getattr(item, "name", None)
+                call_id = getattr(item, "call_id", None)
+                arguments_raw = getattr(item, "arguments", None) or "{}"
+                try:
+                    arguments = json.loads(arguments_raw) if isinstance(arguments_raw, str) else arguments_raw
+                except json.JSONDecodeError:
+                    arguments = {}
+                # No user_phone on the web → product image sending is disabled.
+                result = _handle_tool_call(db, name, arguments, user_phone=None)
+                tool_outputs.append({
+                    "type": "function_call_output",
+                    "call_id": call_id,
+                    "output": result,
+                })
+            if not tool_outputs:
+                return (resp.output_text or ""), conversation_id
+            create_kw["input"] = tool_outputs
+        return ((resp.output_text or "") if resp else ""), conversation_id
     finally:
         db.close()

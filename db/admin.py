@@ -1,4 +1,4 @@
-from db.models import Product, Metal, Lead, Group, TemplateStorage, TemplateStorage
+from db.models import Product, Metal, Lead, Group, TemplateStorage, Referral, Feedback, Category, Review, Blog
 from sqladmin import ModelView, action
 from starlette.requests import Request
 from starlette.responses import RedirectResponse
@@ -27,25 +27,26 @@ class ProductAdmin(ModelView, model=Product):
     icon = "fa-solid fa-box"
     
     column_list = [
-        Product.id, 
-        Product.style_no, 
-        Product.jewel_code, 
-        Product.name, 
+        Product.id,
+        Product.style_no,
+        Product.jewel_code,
+        Product.name,
         Product.gross_weight,
         Product.metal_info,
+        Product.categories,
         "calculated_amount",
         Product.availability,
         Product.description,
         Product.image_url
     ]
-    
+
     column_searchable_list = [Product.name, Product.style_no, Product.jewel_code]
     column_sortable_list = [Product.id, Product.name, Product.style_no, Product.gross_weight, Product.image_url]
-    
-    
+
+
     column_details_exclude_list = []
-    
-    
+
+
     form_columns = [
         Product.style_no,
         Product.jewel_code,
@@ -53,14 +54,16 @@ class ProductAdmin(ModelView, model=Product):
         Product.description,
         Product.gross_weight,
         Product.metal_info,
+        Product.categories,
         Product.availability,
         Product.image_url
     ]
-    
+
     column_labels = {
         "calculated_amount": "Amount (₹)",
         "gross_weight": "Gross Weight (g)",
         "metal_info": "Metal",
+        "categories": "Categories",
         "availability": "Available",
     }
     
@@ -74,19 +77,27 @@ class LeadAdmin(ModelView, model=Lead):
     name = "Lead"
     name_plural = "Leads"
     icon = "fa-solid fa-user"
-    
-    column_list = [Lead.id, Lead.name, Lead.tag, Lead.email, Lead.phone, Lead.created_at]
-    column_searchable_list = [Lead.name, Lead.email, Lead.phone]
-    column_sortable_list = [Lead.id, Lead.name, Lead.created_at]
-    
-    
-    form_columns = [Lead.name, Lead.tag, Lead.email, Lead.phone]
-    
+
+    column_list = [
+        Lead.id, Lead.name, Lead.tag, Lead.onboarding_state,
+        Lead.referral_code, Lead.email, Lead.phone, Lead.created_at,
+    ]
+    column_searchable_list = [Lead.name, Lead.email, Lead.phone, Lead.referral_code]
+    column_sortable_list = [Lead.id, Lead.name, Lead.created_at, Lead.onboarding_state]
+
+
+    form_columns = [
+        Lead.name, Lead.tag, Lead.onboarding_state, Lead.email, Lead.phone,
+        Lead.referral_code,
+    ]
+
     column_labels = {
-        "created_at": "Created At"
+        "created_at": "Created At",
+        "onboarding_state": "Onboarding",
+        "referral_code": "Referral Code",
     }
-    
-   
+
+
     column_formatters = {
         "created_at": lambda m, a: m.created_at.strftime("%Y-%m-%d %H:%M:%S") if m.created_at else ""
     }
@@ -644,14 +655,183 @@ class TemplateStorageAdmin(ModelView, model=TemplateStorage):
     name = "Template"
     name_plural = "Templates"
     icon = "fa-solid fa-file-lines"
-    
+
     column_list = [TemplateStorage.id, TemplateStorage.template_name, TemplateStorage.template_note]
     column_searchable_list = [TemplateStorage.template_name]
     column_sortable_list = [TemplateStorage.id, TemplateStorage.template_name]
-    
+
     form_columns = [TemplateStorage.template_name, TemplateStorage.template_note]
-    
+
     column_labels = {
         "template_name": "Template Name",
         "template_note": "Note"
+    }
+
+
+class ReferralAdmin(ModelView, model=Referral):
+    name = "Referral"
+    name_plural = "Referrals"
+    icon = "fa-solid fa-share-nodes"
+
+    column_list = [
+        Referral.id,
+        Referral.referrer,
+        Referral.referred_name,
+        Referral.referred_phone,
+        Referral.referred_lead,
+        Referral.status,
+        Referral.referral_code,
+        Referral.parent_referral,
+        Referral.created_at,
+        Referral.accepted_at,
+    ]
+    column_searchable_list = [Referral.referred_phone, Referral.referred_name, Referral.referral_code]
+    column_sortable_list = [Referral.id, Referral.status, Referral.created_at, Referral.accepted_at]
+    column_default_sort = [(Referral.created_at, True)]
+
+    # Show the full referral tree on the detail page (referrals from referrals).
+    column_details_list = [
+        Referral.id,
+        Referral.referrer,
+        Referral.referred_name,
+        Referral.referred_phone,
+        Referral.referred_lead,
+        Referral.status,
+        Referral.referral_code,
+        Referral.parent_referral,
+        "child_referrals",
+        Referral.created_at,
+        Referral.accepted_at,
+    ]
+
+    form_columns = [
+        Referral.referrer,
+        Referral.referred_lead,
+        Referral.referred_name,
+        Referral.referred_phone,
+        Referral.referral_code,
+        Referral.status,
+        Referral.parent_referral,
+    ]
+
+    column_labels = {
+        "referrer": "Referred By",
+        "referred_lead": "Joined Lead",
+        "referred_name": "Friend Name",
+        "referred_phone": "Friend Phone",
+        "referral_code": "Code Used",
+        "parent_referral": "Parent Referral",
+        "child_referrals": "Referrals From This",
+        "created_at": "Created At",
+        "accepted_at": "Accepted At",
+    }
+
+    column_formatters = {
+        "created_at": lambda m, a: m.created_at.strftime("%Y-%m-%d %H:%M:%S") if m.created_at else "",
+        "accepted_at": lambda m, a: m.accepted_at.strftime("%Y-%m-%d %H:%M:%S") if m.accepted_at else "—",
+    }
+
+
+class FeedbackAdmin(ModelView, model=Feedback):
+    name = "Feedback"
+    name_plural = "Feedback"
+    icon = "fa-solid fa-comment-dots"
+
+    column_list = [
+        Feedback.id,
+        Feedback.name,
+        Feedback.phone,
+        Feedback.experience,
+        Feedback.feedback_type,
+        Feedback.product,
+        Feedback.created_at,
+    ]
+    column_searchable_list = [Feedback.name, Feedback.phone]
+    column_sortable_list = [Feedback.id, Feedback.experience, Feedback.feedback_type, Feedback.created_at]
+    column_default_sort = [(Feedback.created_at, True)]
+
+    form_columns = [
+        Feedback.name,
+        Feedback.phone,
+        Feedback.experience,
+        Feedback.feedback_type,
+        Feedback.product,
+        Feedback.description,
+    ]
+
+    column_labels = {
+        "feedback_type": "Type",
+        "product": "Product Purchased",
+        "created_at": "Created At",
+    }
+
+    column_formatters = {
+        "created_at": lambda m, a: m.created_at.strftime("%Y-%m-%d %H:%M:%S") if m.created_at else "",
+    }
+
+
+class CategoryAdmin(ModelView, model=Category):
+    name = "Category"
+    name_plural = "Categories"
+    icon = "fa-solid fa-tags"
+
+    column_list = [Category.id, Category.name, Category.products]
+    column_searchable_list = [Category.name]
+    column_sortable_list = [Category.id, Category.name]
+
+    form_columns = [Category.name, Category.products]
+
+    column_labels = {"products": "Items"}
+    column_formatters = {
+        "products": lambda m, a: f"{len(m.products)} item(s)" if m.products else "0 items",
+    }
+
+
+class ReviewAdmin(ModelView, model=Review):
+    name = "Review"
+    name_plural = "Reviews"
+    icon = "fa-solid fa-star"
+
+    column_list = [
+        Review.id,
+        Review.product,
+        Review.rating,
+        Review.name,
+        Review.email,
+        Review.created_at,
+    ]
+    column_searchable_list = [Review.name, Review.email]
+    column_sortable_list = [Review.id, Review.rating, Review.created_at]
+    column_default_sort = [(Review.created_at, True)]
+
+    form_columns = [
+        Review.product,
+        Review.rating,
+        Review.name,
+        Review.email,
+        Review.description,
+    ]
+
+    column_labels = {"product": "Item", "created_at": "Created At"}
+    column_formatters = {
+        "rating": lambda m, a: f"{m.rating}/5" if m.rating is not None else "",
+        "created_at": lambda m, a: m.created_at.strftime("%Y-%m-%d %H:%M:%S") if m.created_at else "",
+    }
+
+
+class BlogAdmin(ModelView, model=Blog):
+    name = "Blog"
+    name_plural = "Blogs"
+    icon = "fa-solid fa-newspaper"
+
+    column_list = [Blog.id, Blog.heading, Blog.created_at]
+    column_searchable_list = [Blog.heading]
+    column_sortable_list = [Blog.id, Blog.heading, Blog.created_at]
+    column_default_sort = [(Blog.created_at, True)]
+
+    form_columns = [Blog.heading, Blog.description]
+
+    column_labels = {"created_at": "Created At"}
+    column_formatters = {
+        "created_at": lambda m, a: m.created_at.strftime("%Y-%m-%d %H:%M:%S") if m.created_at else "",
     }

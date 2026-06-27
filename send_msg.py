@@ -448,3 +448,121 @@ async def send_txt_msg_async(recipient_phone: str, message_text: str):
     async with httpx.AsyncClient(timeout=30.0) as client:
         response = await client.post(url=url, headers=headers, json=data)
         return response
+
+
+# ---------------------------------------------------------------------------
+# Milestone 3: interactive onboarding helpers (async)
+# ---------------------------------------------------------------------------
+
+async def _post_async(data: dict):
+    """POST a payload to the WhatsApp messages endpoint asynchronously."""
+    import httpx
+
+    url = f"https://graph.facebook.com/{version}/{number_id}/messages"
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "Content-type": "application/json",
+    }
+    async with httpx.AsyncClient(timeout=30.0) as client:
+        return await client.post(url=url, headers=headers, json=data)
+
+
+async def send_img_async(recipient_phone: str, link: str, caption: str = ""):
+    """Async version of send_img (JPG/JPEG/PNG)."""
+    return await _post_async({
+        "messaging_product": "whatsapp",
+        "recipient_type": "individual",
+        "to": recipient_phone,
+        "type": "image",
+        "image": {"link": link, "caption": caption},
+    })
+
+
+async def send_template_async(
+    recipient_phone: str,
+    template_name: str,
+    language_code: str = "en_US",
+    body_parameters: list | None = None,
+    header_media_url: str | None = None,
+    header_media_type: str = "image",
+):
+    """Send a WhatsApp approved template to a single recipient (async).
+
+    Args:
+        recipient_phone: recipient WhatsApp number
+        template_name: name of the approved template (e.g. "welcome_template")
+        language_code: template language code
+        body_parameters: optional list of text values for body {{1}}, {{2}}...
+        header_media_url: optional media URL for a dynamic header
+        header_media_type: "image", "video", or "document"
+    """
+    components = []
+    if header_media_url:
+        components.append({
+            "type": "header",
+            "parameters": [
+                {"type": header_media_type, header_media_type: {"link": header_media_url}}
+            ],
+        })
+    if body_parameters:
+        components.append({
+            "type": "body",
+            "parameters": [{"type": "text", "text": str(v)} for v in body_parameters],
+        })
+
+    template: dict = {"name": template_name, "language": {"code": language_code}}
+    if components:
+        template["components"] = components
+
+    return await _post_async({
+        "messaging_product": "whatsapp",
+        "to": recipient_phone,
+        "type": "template",
+        "template": template,
+    })
+
+
+async def send_interactive_buttons(
+    recipient_phone: str,
+    body_text: str,
+    buttons: list,
+    header_image_url: str | None = None,
+    header_text: str | None = None,
+    footer_text: str | None = None,
+):
+    """Send an interactive reply-button message (max 3 buttons).
+
+    Args:
+        recipient_phone: recipient WhatsApp number
+        body_text: main message body
+        buttons: list of {"id": str, "title": str} (title <= 20 chars)
+        header_image_url: optional poster/image shown above the body
+        header_text: optional text header (ignored if header_image_url given)
+        footer_text: optional small footer text
+    """
+    action_buttons = [
+        {"type": "reply", "reply": {"id": b["id"], "title": b["title"][:20]}}
+        for b in buttons[:3]
+    ]
+
+    interactive: dict = {
+        "type": "button",
+        "body": {"text": body_text},
+        "action": {"buttons": action_buttons},
+    }
+
+    if header_image_url:
+        interactive["header"] = {"type": "image", "image": {"link": header_image_url}}
+    elif header_text:
+        interactive["header"] = {"type": "text", "text": header_text[:60]}
+
+    if footer_text:
+        interactive["footer"] = {"text": footer_text[:60]}
+
+    return await _post_async({
+        "messaging_product": "whatsapp",
+        "recipient_type": "individual",
+        "to": recipient_phone,
+        "type": "interactive",
+        "interactive": interactive,
+    })

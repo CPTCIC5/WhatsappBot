@@ -11,7 +11,7 @@ from fastapi.staticfiles import StaticFiles
 import shutil
 from db.models import Base, engine, get_db, Lead
 from sqlalchemy.orm import Session
-from send_msg import send_txt_msg_async
+from flows import handle_incoming_message
 import logging
 
 # Set up logging
@@ -31,46 +31,15 @@ PORT = int(os.getenv("PORT", 8000))
 static_path = Path("static")
 static_path.mkdir(exist_ok=True)
 
-async def process_message_and_respond(wa_id: str, message_from: str, message_id: str, content: str):
-    """
-    Simple background task to process AI response and send WhatsApp message.
-    """
-    try:
-        logger.info(f"Processing message from {wa_id}: {content[:50]}...")
-        
-        # Get database session
-        db = next(get_db())
-        
-        try:
-            # Get lead and generate AI response
-            lead = db.query(Lead).filter(Lead.phone == wa_id).first()
-            response_gpt = chat_with_assistant(lead.id, content) if lead else chat_with_assistant(None, content)
-            
-            logger.info(f"AI response generated for {wa_id}: {response_gpt[:50]}...")
-            
-            # Send response using async function
-            response = await send_txt_msg_async(message_from, response_gpt)
-            
-            if response.status_code == 200:
-                logger.info(f"Message sent successfully to {wa_id}")
-            else:
-                logger.error(f"Failed to send message to {wa_id}: {response.status_code}")
-                
-        finally:
-            db.close()
-        
-    except Exception as e:
-        logger.error(f"Error processing message for {wa_id}: {str(e)}")
-
-
 @router.post("/webhook")
-async def webhook(request: Request, background_tasks: BackgroundTasks, db: Session = Depends(get_db)):
+async def webhook(request: Request, background_tasks: BackgroundTasks):
     """
-    Simple, fast webhook endpoint that handles concurrent requests.
+    Fast webhook endpoint. Parses the inbound message and hands all routing
+    (onboarding, referrals, AI replies) to the background task in flows.py.
     """
     try:
         body = await request.json()
-        
+
         # Extract contact info
         contact = (
             body.get("entry", [{}])[0]
@@ -80,55 +49,26 @@ async def webhook(request: Request, background_tasks: BackgroundTasks, db: Sessi
         )
         wa_id = contact.get("wa_id")
         name = contact.get("profile", {}).get("name")
-        
-        logger.info(f"Webhook received from {wa_id} ({name})")
-        
-        # Create new lead if doesn't exist or update thread_id if empty
-        if wa_id:
-            existing_lead = db.query(Lead).filter(Lead.phone == wa_id).first()
-            if not existing_lead:
-                try:
-                    from openai import OpenAI
-                    openai_client = OpenAI()
-                    new_conv = openai_client.conversations.create()
-                    new_lead = Lead(phone=wa_id, name=name, thread_id=new_conv.id)
-                    db.add(new_lead)
-                    db.commit()
-                    logger.info(f"New lead created: {wa_id}")
-                except Exception as e:
-                    logger.error(f"Error creating lead for {wa_id}: {str(e)}")
-            elif not existing_lead.thread_id:
-                try:
-                    from openai import OpenAI
-                    openai_client = OpenAI()
-                    new_conv = openai_client.conversations.create()
-                    existing_lead.thread_id = new_conv.id
-                    db.commit()
-                    logger.info(f"Thread ID updated for existing lead: {wa_id}")
-                except Exception as e:
-                    logger.error(f"Error updating thread_id for {wa_id}: {str(e)}")
-        # Extract message
-        message = body.get("entry", [{}])[0].get("changes", [{}])[0].get("value", {}).get("messages", [{}])[0]
 
-        if message.get("type") == "text":
-            content = message["text"]["body"]
-            message_from = message["from"]
-            message_id = message["id"]
-            
-            # Add simple background task
-            background_tasks.add_task(
-                process_message_and_respond,
-                wa_id,
-                message_from,
-                message_id,
-                content
-            )
-            
-            logger.info(f"Background task queued for {wa_id}")
+        logger.info(f"Webhook received from {wa_id} ({name})")
+
+        # Extract the message (text, interactive, etc.)
+        message = (
+            body.get("entry", [{}])[0]
+            .get("changes", [{}])[0]
+            .get("value", {})
+            .get("messages", [{}])[0]
+        )
+
+        # Only act on real inbound messages from a known sender (ignore status
+        # callbacks and empty payloads).
+        if wa_id and message.get("type"):
+            background_tasks.add_task(handle_incoming_message, wa_id, name, message)
+            logger.info(f"Background task queued for {wa_id} (type={message.get('type')})")
 
         # Return immediately
         return PlainTextResponse('', status_code=200)
-        
+
     except Exception as e:
         logger.error(f"Webhook error: {str(e)}")
         return PlainTextResponse('', status_code=200)
@@ -177,15 +117,27 @@ app.mount("/media", StaticFiles(directory="media"), name="media")
 Base.metadata.create_all(bind=engine)
 app.include_router(router)
 
+# Website REST APIs (feedback CRUD + chatbot)
+from api import api_router
+app.include_router(api_router)
+
 from sqladmin import Admin
 admin = Admin(app, engine)
 
-from db.admin import ProductAdmin, MetalAdmin, LeadAdmin, GroupAdmin,TemplateStorageAdmin
+from db.admin import (
+    ProductAdmin, MetalAdmin, LeadAdmin, GroupAdmin, TemplateStorageAdmin,
+    ReferralAdmin, FeedbackAdmin, CategoryAdmin, ReviewAdmin, BlogAdmin,
+)
 admin.add_view(MetalAdmin)
 admin.add_view(ProductAdmin)
+admin.add_view(CategoryAdmin)
 admin.add_view(LeadAdmin)
 admin.add_view(GroupAdmin)
 admin.add_view(TemplateStorageAdmin)
+admin.add_view(ReferralAdmin)
+admin.add_view(FeedbackAdmin)
+admin.add_view(ReviewAdmin)
+admin.add_view(BlogAdmin)
 
 if __name__ == "__main__":
     import uvicorn
