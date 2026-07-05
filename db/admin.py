@@ -1,9 +1,9 @@
-from db.models import Product, ProductImage, Metal, Lead, Group, TemplateStorage, Referral, Feedback, Category, Review, Blog
+from db.models import Product, ProductImage, Metal, Lead, Group, TemplateStorage, Referral, Feedback, Category, Review, Blog, SessionLocal
 from sqladmin import ModelView, action
 from starlette.requests import Request
 from starlette.responses import RedirectResponse
 from starlette.datastructures import UploadFile as StarletteUploadFile
-from wtforms import Form, TextAreaField, FileField, validators
+from wtforms import Form, TextAreaField, FileField, MultipleFileField, validators
 from markupsafe import Markup
 import os
 import requests
@@ -99,6 +99,31 @@ class ProductAdmin(ModelView, model=Product):
     column_formatters_detail = {
         "images": lambda m, a: _product_thumbs(m),
     }
+
+    async def scaffold_form(self, rules=None):
+        """Add a multi-file 'Add Images' field to the product form."""
+        form_class = await super().scaffold_form(rules)
+        form_class.upload_images = MultipleFileField("Add Images")
+        return form_class
+
+    async def after_model_change(self, data, model, is_created, request):
+        """Upload any files chosen in 'Add Images' and attach them to the product."""
+        uploads = data.get("upload_images") or []
+        db = SessionLocal()
+        try:
+            added = False
+            for f in uploads:
+                if isinstance(f, StarletteUploadFile) and f.filename:
+                    content = await f.read()
+                    blob = azure_storage.upload_image(
+                        content, f.content_type, prefix="products/"
+                    )
+                    db.add(ProductImage(product_id=model.id, blob_name=blob))
+                    added = True
+            if added:
+                db.commit()
+        finally:
+            db.close()
 
 
 class ProductImageAdmin(ModelView, model=ProductImage):
