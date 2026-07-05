@@ -1,4 +1,4 @@
-from db.models import Product, Metal, Lead, Group, TemplateStorage, Referral, Feedback, Category, Review, Blog
+from db.models import Product, ProductImage, Metal, Lead, Group, TemplateStorage, Referral, Feedback, Category, Review, Blog
 from sqladmin import ModelView, action
 from starlette.requests import Request
 from starlette.responses import RedirectResponse
@@ -20,6 +20,22 @@ def _image_cell(blob_or_url):
     if not url:
         return "—"
     return Markup(f'<img src="{url}" style="height:48px;border-radius:6px" />')
+
+
+def _product_thumbs(product):
+    """Render thumbnails for all of a product's images (legacy image_url + uploaded)."""
+    blobs = []
+    if getattr(product, "image_url", None):
+        blobs.append(product.image_url)
+    blobs += [img.blob_name for img in getattr(product, "images", [])]
+    if not blobs:
+        return "—"
+    tags = []
+    for b in blobs[:5]:
+        url = azure_storage.resolve_url(b)
+        if url:
+            tags.append(f'<img src="{url}" style="height:48px;border-radius:6px;margin-right:4px" />')
+    return Markup("".join(tags)) if tags else "—"
 
 class MetalAdmin(ModelView, model=Metal):
     name = "Metal"
@@ -48,17 +64,13 @@ class ProductAdmin(ModelView, model=Product):
         Product.categories,
         "calculated_amount",
         Product.availability,
-        Product.description,
-        Product.image_url
+        "images",
     ]
 
     column_searchable_list = [Product.name, Product.style_no, Product.jewel_code]
-    column_sortable_list = [Product.id, Product.name, Product.style_no, Product.gross_weight, Product.image_url]
+    column_sortable_list = [Product.id, Product.name, Product.style_no, Product.gross_weight]
 
-
-    column_details_exclude_list = []
-
-
+    # Images are managed in the "Product Images" section (multiple per product).
     form_columns = [
         Product.style_no,
         Product.jewel_code,
@@ -68,7 +80,6 @@ class ProductAdmin(ModelView, model=Product):
         Product.metal_info,
         Product.categories,
         Product.availability,
-        Product.image_url
     ]
 
     column_labels = {
@@ -77,35 +88,62 @@ class ProductAdmin(ModelView, model=Product):
         "metal_info": "Metal",
         "categories": "Categories",
         "availability": "Available",
-        "image_url": "Image",
+        "images": "Images",
     }
-
-    # Upload the image as a file (stored in Azure); the DB keeps the blob name.
-    form_overrides = {"image_url": FileField}
 
     column_formatters = {
         "gross_weight": lambda m, a: f"{m.gross_weight:.3f}" if m.gross_weight else "0.000",
         "calculated_amount": lambda m, a: f"₹{m.calculated_amount:,.2f}" if m.calculated_amount else "₹0.00",
-        "image_url": lambda m, a: _image_cell(m.image_url),
+        "images": lambda m, a: _product_thumbs(m),
     }
     column_formatters_detail = {
-        "image_url": lambda m, a: _image_cell(m.image_url),
+        "images": lambda m, a: _product_thumbs(m),
+    }
+
+
+class ProductImageAdmin(ModelView, model=ProductImage):
+    name = "Product Image"
+    name_plural = "Product Images"
+    icon = "fa-solid fa-images"
+
+    column_list = [ProductImage.id, ProductImage.product, "preview", ProductImage.created_at]
+    column_sortable_list = [ProductImage.id, ProductImage.created_at]
+
+    # Upload a file (stored in Azure); the DB keeps only the blob name.
+    form_columns = [ProductImage.product, ProductImage.blob_name]
+    form_overrides = {"blob_name": FileField}
+    # Optional at the form level so editing without re-picking a file works;
+    # a file is still required on create (enforced in on_model_change).
+    form_args = {"blob_name": {"validators": []}}
+    column_labels = {"blob_name": "Image File", "preview": "Preview", "product": "Item"}
+
+    column_formatters = {
+        "preview": lambda m, a: _image_cell(m.blob_name),
+    }
+    column_formatters_detail = {
+        "preview": lambda m, a: _image_cell(m.blob_name),
     }
 
     async def on_model_change(self, data, model, is_created, request):
-        """Upload a newly chosen image file to Azure and store its blob name."""
-        upload = data.get("image_url")
+        """Upload the chosen image file to Azure; store its blob name."""
+        upload = data.get("blob_name")
         if isinstance(upload, StarletteUploadFile) and upload.filename:
             content = await upload.read()
-            old = getattr(model, "image_url", None)
-            data["image_url"] = azure_storage.upload_image(
+            old = getattr(model, "blob_name", None)
+            data["blob_name"] = azure_storage.upload_image(
                 content, upload.content_type, prefix="products/"
             )
             if old and not is_created:
                 azure_storage.delete_blob(old)
+        elif is_created:
+            raise ValueError("Please choose an image file to upload.")
         else:
-            # No new file chosen: keep existing value, don't overwrite with empty.
-            data["image_url"] = None if is_created else getattr(model, "image_url", None)
+            # Editing without choosing a new file: keep the existing image.
+            data["blob_name"] = getattr(model, "blob_name", None)
+
+    async def on_model_delete(self, model, request):
+        if model.blob_name:
+            azure_storage.delete_blob(model.blob_name)
 
 
 class LeadAdmin(ModelView, model=Lead):
@@ -810,16 +848,36 @@ class CategoryAdmin(ModelView, model=Category):
     name_plural = "Categories"
     icon = "fa-solid fa-tags"
 
-    column_list = [Category.id, Category.name, Category.products]
+    column_list = [Category.id, Category.name, "image_blob", Category.products]
     column_searchable_list = [Category.name]
     column_sortable_list = [Category.id, Category.name]
 
-    form_columns = [Category.name, Category.products]
+    # Upload a file (stored in Azure); the DB keeps the blob name.
+    form_columns = [Category.name, Category.image_blob, Category.products]
+    form_overrides = {"image_blob": FileField}
 
-    column_labels = {"products": "Items"}
+    column_labels = {"products": "Items", "image_blob": "Image"}
     column_formatters = {
         "products": lambda m, a: f"{len(m.products)} item(s)" if m.products else "0 items",
+        "image_blob": lambda m, a: _image_cell(m.image_blob),
     }
+    column_formatters_detail = {
+        "image_blob": lambda m, a: _image_cell(m.image_blob),
+    }
+
+    async def on_model_change(self, data, model, is_created, request):
+        """Upload a newly chosen category image to Azure; store its blob name."""
+        upload = data.get("image_blob")
+        if isinstance(upload, StarletteUploadFile) and upload.filename:
+            content = await upload.read()
+            old = getattr(model, "image_blob", None)
+            data["image_blob"] = azure_storage.upload_image(
+                content, upload.content_type, prefix="categories/"
+            )
+            if old and not is_created:
+                azure_storage.delete_blob(old)
+        else:
+            data["image_blob"] = None if is_created else getattr(model, "image_blob", None)
 
 
 class ReviewAdmin(ModelView, model=Review):

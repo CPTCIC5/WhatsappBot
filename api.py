@@ -130,18 +130,33 @@ def chat(payload: ChatRequest):
 category_router = APIRouter(prefix="/categories", tags=["categories"])
 
 
+def _serialize_category(cat: Category) -> CategoryOut:
+    return CategoryOut(
+        id=cat.id,
+        name=cat.name,
+        image_url=azure_storage.resolve_url(cat.image_blob),
+    )
+
+
 @category_router.post("", response_model=CategoryOut, status_code=201)
-def create_category(payload: CategoryCreate, db: Session = Depends(get_db)):
-    category = Category(**payload.model_dump())
+async def create_category(
+    name: str = Form(..., min_length=1, max_length=120),
+    image: UploadFile | None = File(None),
+    db: Session = Depends(get_db),
+):
+    category = Category(name=name)
+    if image is not None and image.filename:
+        category.image_blob = await _store_upload(image, prefix="categories/")
     db.add(category)
     db.commit()
     db.refresh(category)
-    return category
+    return _serialize_category(category)
 
 
 @category_router.get("", response_model=list[CategoryOut])
 def list_categories(skip: int = 0, limit: int = 100, db: Session = Depends(get_db)):
-    return db.query(Category).order_by(Category.name).offset(skip).limit(min(limit, 500)).all()
+    cats = db.query(Category).order_by(Category.name).offset(skip).limit(min(limit, 500)).all()
+    return [_serialize_category(c) for c in cats]
 
 
 @category_router.get("/{category_id}", response_model=CategoryOut)
@@ -149,19 +164,29 @@ def get_category(category_id: int, db: Session = Depends(get_db)):
     category = db.query(Category).filter(Category.id == category_id).first()
     if not category:
         raise HTTPException(status_code=404, detail="Category not found")
-    return category
+    return _serialize_category(category)
 
 
 @category_router.patch("/{category_id}", response_model=CategoryOut)
-def update_category(category_id: int, payload: CategoryUpdate, db: Session = Depends(get_db)):
+async def update_category(
+    category_id: int,
+    name: str | None = Form(None, min_length=1, max_length=120),
+    image: UploadFile | None = File(None),
+    db: Session = Depends(get_db),
+):
     category = db.query(Category).filter(Category.id == category_id).first()
     if not category:
         raise HTTPException(status_code=404, detail="Category not found")
-    for key, value in payload.model_dump(exclude_unset=True).items():
-        setattr(category, key, value)
+    if name is not None:
+        category.name = name
+    if image is not None and image.filename:
+        old = category.image_blob
+        category.image_blob = await _store_upload(image, prefix="categories/")
+        if old:
+            azure_storage.delete_blob(old)
     db.commit()
     db.refresh(category)
-    return category
+    return _serialize_category(category)
 
 
 @category_router.delete("/{category_id}", status_code=204)
@@ -169,6 +194,8 @@ def delete_category(category_id: int, db: Session = Depends(get_db)):
     category = db.query(Category).filter(Category.id == category_id).first()
     if not category:
         raise HTTPException(status_code=404, detail="Category not found")
+    if category.image_blob:
+        azure_storage.delete_blob(category.image_blob)
     db.delete(category)
     db.commit()
     return None
@@ -366,8 +393,9 @@ def _serialize_item(p: Product) -> ItemOut:
         metal_id=p.metal_id,
         metal=p.metal_info,
         calculated_amount=p.calculated_amount,
-        categories=p.categories,
+        categories=[_serialize_category(cat) for cat in p.categories],
         images=images,
+        reviews=p.reviews,
     )
 
 

@@ -125,11 +125,12 @@ from sqladmin import Admin
 admin = Admin(app, engine)
 
 from db.admin import (
-    ProductAdmin, MetalAdmin, LeadAdmin, GroupAdmin, TemplateStorageAdmin,
+    ProductAdmin, ProductImageAdmin, MetalAdmin, LeadAdmin, GroupAdmin, TemplateStorageAdmin,
     ReferralAdmin, FeedbackAdmin, CategoryAdmin, ReviewAdmin, BlogAdmin,
 )
 admin.add_view(MetalAdmin)
 admin.add_view(ProductAdmin)
+admin.add_view(ProductImageAdmin)
 admin.add_view(CategoryAdmin)
 admin.add_view(LeadAdmin)
 admin.add_view(GroupAdmin)

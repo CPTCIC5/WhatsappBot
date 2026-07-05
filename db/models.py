@@ -76,6 +76,8 @@ class Category(Base):
 
     id = Column(Integer, primary_key=True, index=True)
     name = Column(String, index=True, nullable=False)
+    # Azure blob name for the category image (resolved to a SAS URL on read)
+    image_blob = Column(String, nullable=True)
 
     products = relationship("Product", secondary="product_categories", back_populates="categories")
 

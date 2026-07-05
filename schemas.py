@@ -71,8 +71,8 @@ class CategoryUpdate(BaseModel):
 
 
 class CategoryOut(CategoryBase):
-    model_config = ConfigDict(from_attributes=True)
     id: int
+    image_url: Optional[str] = None
 
 
 # --- Reviews -----------------------------------------------------------------
@@ -154,4 +154,5 @@ class ItemOut(BaseModel):
     calculated_amount: float = 0.0
     categories: list[CategoryOut] = []
     images: list[ItemImageOut] = []
+    reviews: list[ReviewOut] = []
 

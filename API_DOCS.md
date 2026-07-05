@@ -166,37 +166,42 @@ Content-Type: application/json
 
 ---
 
-## 3. Categories — `/api/categories`
+## 3. Categories — `/api/categories`  *(create/update use form-data)*
 
-Item categories (an item can belong to many; categories can be added freely).
+Item categories (an item can belong to many). Each category can have an image.
 
-### Object
+### Object (response)
 
 | Field | Type | Notes |
 |-------|------|-------|
 | `id` | int | read-only |
 | `name` | string | required, 1–120 chars |
+| `image_url` | string \| null | signed URL of the category image (or `null`) |
 
 ### Endpoints
 
-| Method | Path | Description |
-|--------|------|-------------|
-| `POST` | `/api/categories` | Create → `201` |
-| `GET` | `/api/categories` | List (params: `skip`=0, `limit`=100/max 500; sorted by name) |
-| `GET` | `/api/categories/{id}` | Get one |
-| `PATCH` | `/api/categories/{id}` | Update |
-| `DELETE` | `/api/categories/{id}` | Delete → `204` |
+| Method | Path | Body | Description |
+|--------|------|------|-------------|
+| `POST` | `/api/categories` | `multipart/form-data` | Create → `201` |
+| `GET` | `/api/categories` | — | List (`skip`=0, `limit`=100/max 500; by name) |
+| `GET` | `/api/categories/{id}` | — | Get one |
+| `PATCH` | `/api/categories/{id}` | `multipart/form-data` | Update |
+| `DELETE` | `/api/categories/{id}` | — | Delete → `204` (also deletes image) |
 
-```http
-POST /api/categories
-{ "name": "Rings" }
+**Form fields:** `name` (text), `image` (file, optional).
+
+```js
+const fd = new FormData();
+fd.append("name", "Rings");
+fd.append("image", fileInput.files[0]);   // optional
+await fetch("/api/categories", { method: "POST", body: fd });
 ```
 
 ```json
-{ "name": "Rings", "id": 3 }
+{ "id": 3, "name": "Rings", "image_url": "https://ridra.blob.core.windows.net/catalogue-images/categories/...jpg?<sas>" }
 ```
 
-> Linking categories to items is currently managed in the admin panel (Product form). If you need a public endpoint to attach/detach categories on an item, ask and we'll add it.
+> Linking categories to items is done on the item (`category_ids` in the Items API) or in the admin Product form.
 
 ---
 
@@ -320,8 +325,9 @@ Catalogue items with multiple images.
 | `metal_id` | int \| null | |
 | `metal` | object \| null | `{ id, metal, karat, rate_per_gram }` |
 | `calculated_amount` | number | `gross_weight × metal.rate_per_gram` (₹) |
-| `categories` | array | `[{ id, name }]` |
+| `categories` | array | `[{ id, name, image_url }]` |
 | `images` | array | `[{ id, url }]` — `url` is a signed URL; `id` is used to delete an image (`null` for the legacy admin image) |
+| `reviews` | array | `[{ id, product_id, rating, name, email, description, created_at }]` |
 
 ### Endpoints
 
@@ -375,6 +381,9 @@ await fetch("/api/items", { method: "POST", body: fd });
   "categories": [{ "id": 1, "name": "Necklaces" }],
   "images": [
     { "id": 7, "url": "https://ridra.blob.core.windows.net/catalogue-images/products/...jpg?<sas>" }
+  ],
+  "reviews": [
+    { "id": 3, "product_id": 12, "rating": 4.5, "name": "Asha", "email": null, "description": "Lovely", "created_at": "2026-07-05T10:00:00" }
   ]
 }
 ```
