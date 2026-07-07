@@ -23,6 +23,7 @@ from schemas import (
     BlogUpdate,
     BlogOut,
     ItemOut,
+    ItemMetalOut,
 )
 
 logger = logging.getLogger(__name__)
@@ -452,8 +453,11 @@ async def create_item(
 def list_items(
     name: str | None = None,
     metal: str | None = None,
+    metal_id: int | None = None,   # exact metal row id (preferred over 'metal' name)
     category_id: int | None = None,
     available: bool | None = None,
+    min_price: float | None = None,
+    max_price: float | None = None,
     skip: int = 0,
     limit: int = 50,
     db: Session = Depends(get_db),
@@ -461,8 +465,26 @@ def list_items(
     query = db.query(Product)
     if name:
         query = query.filter(Product.name.ilike(f"%{name}%"))
-    if metal:
+
+    # Exact metal_id filter (preferred — unique per metal+karat row)
+    if metal_id is not None:
+        query = query.filter(Product.metal_id == metal_id)
+
+    joined_metal = False
+    # Fuzzy metal name filter (legacy — matches all rows with the same metal name)
+    if metal and metal_id is None:
         query = query.join(Product.metal_info).filter(Metal.metal.ilike(f"%{metal}%"))
+        joined_metal = True
+
+    if min_price is not None or max_price is not None:
+        if not joined_metal:
+            query = query.join(Product.metal_info)
+            joined_metal = True
+        if min_price is not None:
+            query = query.filter(Product.gross_weight * Metal.rate_per_gram >= min_price)
+        if max_price is not None:
+            query = query.filter(Product.gross_weight * Metal.rate_per_gram <= max_price)
+
     if category_id is not None:
         query = query.filter(Product.categories.any(Category.id == category_id))
     if available is not None:
@@ -554,9 +576,23 @@ def delete_item_image(item_id: int, image_id: int, db: Session = Depends(get_db)
     return None
 
 
+# --- Metals (read-only) ------------------------------------------------------
+
+metal_router = APIRouter(prefix="/metals", tags=["metals"])
+
+
+@metal_router.get("", response_model=list[ItemMetalOut])
+def list_metals(db: Session = Depends(get_db)):
+    """Return all metals available in the database."""
+    return db.query(Metal).order_by(Metal.id).all()
+
+
+# --- Register all sub-routers on the main api_router -------------------------
+
 api_router.include_router(feedback_router)
 api_router.include_router(chat_router)
 api_router.include_router(category_router)
 api_router.include_router(review_router)
 api_router.include_router(blog_router)
 api_router.include_router(item_router)
+api_router.include_router(metal_router)
