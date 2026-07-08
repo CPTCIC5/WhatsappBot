@@ -2,11 +2,44 @@ from sqlalchemy import create_engine, Column, Integer, String, DateTime, JSON, E
 from sqlalchemy.orm import relationship, declarative_base, sessionmaker
 from datetime import datetime
 from dotenv import load_dotenv
+import os
+from urllib.parse import quote_plus
 
 load_dotenv()
 
-DATABASE_URL = "sqlite:///./test.db"
-engine= create_engine(DATABASE_URL)
+
+def _build_database_url() -> str:
+    """Resolve the database URL.
+
+    Priority:
+    1. DATABASE_URL (full SQLAlchemy URL), if set.
+    2. Azure/standard PostgreSQL from PG* env vars (SSL required by Azure).
+    3. Local SQLite fallback for development.
+    """
+    url = os.getenv("DATABASE_URL")
+    if url:
+        return url
+
+    host = os.getenv("PGHOST")
+    if host:
+        user = os.getenv("PGUSER", "postgres")
+        password = quote_plus(os.getenv("PGPASSWORD", ""))
+        port = os.getenv("PGPORT", "5432")
+        dbname = os.getenv("PGDATABASE", "postgres")
+        sslmode = os.getenv("PGSSLMODE", "require")
+        return f"postgresql+psycopg2://{user}:{password}@{host}:{port}/{dbname}?sslmode={sslmode}"
+
+    return "sqlite:///./test.db"
+
+
+DATABASE_URL = _build_database_url()
+
+# SQLite needs check_same_thread=False; Postgres benefits from pooled, pre-pinged
+# connections (Azure closes idle connections).
+if DATABASE_URL.startswith("sqlite"):
+    engine = create_engine(DATABASE_URL, connect_args={"check_same_thread": False})
+else:
+    engine = create_engine(DATABASE_URL, pool_pre_ping=True, pool_recycle=1800)
 
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 Base = declarative_base()
@@ -50,6 +83,11 @@ class Product(Base):
     categories = relationship("Category", secondary="product_categories", back_populates="products")
     reviews = relationship("Review", back_populates="product", cascade="all, delete-orphan")
     images = relationship("ProductImage", back_populates="product", cascade="all, delete-orphan")
+
+    # Transient (NOT persisted): the admin "Add Images" multi-file field binds
+    # here. Declaring it avoids AttributeError when sqladmin reads the field off
+    # the object on edit; the actual files are handled in after_model_change.
+    upload_images = None
 
     @property
     def calculated_amount(self):
