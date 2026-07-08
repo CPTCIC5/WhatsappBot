@@ -8,17 +8,55 @@ from pydantic import BaseModel, ConfigDict, Field
 
 # --- Feedback ----------------------------------------------------------------
 
-Experience = Literal["happy", "medium", "sad"]
-FeedbackType = Literal["product_purchased", "staff_experience", "activities"]
+RatingValue = Literal["Needs Improvement", "Good", "Loved It!"]
+
+
+class ReferenceEntry(BaseModel):
+    """One row of the References table (section 7)."""
+    name: Optional[str] = None
+    mobile: Optional[str] = None
+    relation: Optional[str] = None
+    area: Optional[str] = None
 
 
 class FeedbackBase(BaseModel):
+    # ── Section 1: Sparkle Member Details ──────────────────────────────
     name: str = Field(..., min_length=1, max_length=120)
     phone: str = Field(..., min_length=6, max_length=20)
-    experience: Experience
-    feedback_type: FeedbackType
-    product_id: Optional[int] = None
-    description: Optional[str] = None
+    email: Optional[str] = None
+    address: Optional[str] = None
+    spouse_name: Optional[str] = None
+
+    # ── Section 2: Celebration Moments ──────────────────────────────────
+    anniversary_date: Optional[str] = None   # ISO date string e.g. "2024-03-15"
+    spouse_birthday: Optional[str] = None
+    child_birthday: Optional[str] = None
+
+    # ── Section 3: Tell Me About You ─────────────────────────────────
+    about_you: Optional[str] = None
+
+    # ── Section 4: What Makes Your Heart Shine ───────────────────────
+    jewellery_preferences: Optional[list[str]] = None  # e.g. ["purity", "daily"]
+
+    # ── Section 5: Your Ridra Experience ────────────────────────────
+    rating_designs: Optional[RatingValue] = None
+    rating_quality: Optional[RatingValue] = None
+    rating_value: Optional[RatingValue] = None
+    rating_staff: Optional[RatingValue] = None
+    rating_overall: Optional[RatingValue] = None
+
+    # ── Section 6: Your Words, Our Motivation ──────────────────────
+    words: Optional[str] = None
+
+    # ── Section 7: References ───────────────────────────────────────
+    references: Optional[list[ReferenceEntry]] = None
+
+    # ── Section 8: Let's Stay Connected ────────────────────────────
+    join_update_list: Optional[bool] = None
+    visited_recently: Optional[bool] = None
+    can_give_references: Optional[bool] = None
+    next_visit_pref_1: Optional[str] = None
+    next_visit_pref_2: Optional[str] = None
 
 
 class FeedbackCreate(FeedbackBase):
@@ -27,12 +65,36 @@ class FeedbackCreate(FeedbackBase):
 
 class FeedbackUpdate(BaseModel):
     """All fields optional for partial updates."""
+    # Section 1
     name: Optional[str] = Field(None, min_length=1, max_length=120)
     phone: Optional[str] = Field(None, min_length=6, max_length=20)
-    experience: Optional[Experience] = None
-    feedback_type: Optional[FeedbackType] = None
-    product_id: Optional[int] = None
-    description: Optional[str] = None
+    email: Optional[str] = None
+    address: Optional[str] = None
+    spouse_name: Optional[str] = None
+    # Section 2
+    anniversary_date: Optional[str] = None
+    spouse_birthday: Optional[str] = None
+    child_birthday: Optional[str] = None
+    # Section 3
+    about_you: Optional[str] = None
+    # Section 4
+    jewellery_preferences: Optional[list[str]] = None
+    # Section 5
+    rating_designs: Optional[RatingValue] = None
+    rating_quality: Optional[RatingValue] = None
+    rating_value: Optional[RatingValue] = None
+    rating_staff: Optional[RatingValue] = None
+    rating_overall: Optional[RatingValue] = None
+    # Section 6
+    words: Optional[str] = None
+    # Section 7
+    references: Optional[list[ReferenceEntry]] = None
+    # Section 8
+    join_update_list: Optional[bool] = None
+    visited_recently: Optional[bool] = None
+    can_give_references: Optional[bool] = None
+    next_visit_pref_1: Optional[str] = None
+    next_visit_pref_2: Optional[str] = None
 
 
 class FeedbackOut(FeedbackBase):
@@ -40,6 +102,7 @@ class FeedbackOut(FeedbackBase):
 
     id: int
     created_at: Optional[datetime] = None
+
 
 
 # --- Website chatbot ---------------------------------------------------------

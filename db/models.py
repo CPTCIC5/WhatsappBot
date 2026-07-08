@@ -261,29 +261,53 @@ class TemplateStorage(Base):
 
 
 class Feedback(Base):
-    """Customer feedback collected via the website feedback forum."""
+    """Customer feedback collected via the website feedback form (8-section form)."""
 
     __tablename__ = "feedback"
 
     id = Column(Integer, primary_key=True, index=True)
-    name = Column(String, index=True, nullable=False)
-    phone = Column(String, index=True, nullable=False)
-    # How the customer felt about the experience
-    experience = Column(
-        Enum("happy", "medium", "sad", name="feedback_experience"),
-        nullable=False,
-    )
-    # What the feedback is about
-    feedback_type = Column(
-        Enum("product_purchased", "staff_experience", "activities", name="feedback_type"),
-        nullable=False,
-    )
-    # Optional product the feedback relates to (selectable)
-    product_id = Column(Integer, ForeignKey("products.id"), nullable=True, index=True)
-    description = Column(Text, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
 
-    product = relationship("Product")
+    # ── Section 1: Sparkle Member Details ──────────────────────────────
+    name = Column(String, index=True, nullable=False)
+    phone = Column(String, index=True, nullable=False)
+    email = Column(String, nullable=True)
+    address = Column(String, nullable=True)
+    spouse_name = Column(String, nullable=True)
+
+    # ── Section 2: Celebration Moments ──────────────────────────────────
+    anniversary_date = Column(String, nullable=True)   # stored as ISO date string
+    spouse_birthday = Column(String, nullable=True)
+    child_birthday = Column(String, nullable=True)
+
+    # ── Section 3: Tell Me About You ─────────────────────────────────
+    about_you = Column(Text, nullable=True)
+
+    # ── Section 4: What Makes Your Heart Shine ───────────────────────
+    # JSON array of selected option ids e.g. ["purity", "daily", "custom"]
+    jewellery_preferences = Column(JSON, nullable=True)
+
+    # ── Section 5: Your Ridra Experience ────────────────────────────
+    # Each rating: "Needs Improvement" | "Good" | "Loved It!"
+    rating_designs = Column(String, nullable=True)
+    rating_quality = Column(String, nullable=True)
+    rating_value = Column(String, nullable=True)
+    rating_staff = Column(String, nullable=True)
+    rating_overall = Column(String, nullable=True)
+
+    # ── Section 6: Your Words, Our Motivation ──────────────────────
+    words = Column(Text, nullable=True)
+
+    # ── Section 7: References ───────────────────────────────────────
+    # JSON array of {name, mobile, relation, area} objects (up to 5)
+    references = Column(JSON, nullable=True)
+
+    # ── Section 8: Let's Stay Connected ────────────────────────────
+    join_update_list = Column(Boolean, nullable=True)   # Yes/No
+    visited_recently = Column(Boolean, nullable=True)
+    can_give_references = Column(Boolean, nullable=True)
+    next_visit_pref_1 = Column(String, nullable=True)
+    next_visit_pref_2 = Column(String, nullable=True)
 
     def __repr__(self):
-        return f"Feedback #{self.id} ({self.experience})"
+        return f"Feedback #{self.id} from {self.name}"

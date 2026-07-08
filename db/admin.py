@@ -839,33 +839,61 @@ class FeedbackAdmin(ModelView, model=Feedback):
         Feedback.id,
         Feedback.name,
         Feedback.phone,
-        Feedback.experience,
-        Feedback.feedback_type,
-        Feedback.product,
+        Feedback.email,
+        Feedback.address,
+        Feedback.rating_overall,
+        Feedback.join_update_list,
         Feedback.created_at,
     ]
-    column_searchable_list = [Feedback.name, Feedback.phone]
-    column_sortable_list = [Feedback.id, Feedback.experience, Feedback.feedback_type, Feedback.created_at]
+    column_searchable_list = [Feedback.name, Feedback.phone, Feedback.email]
+    column_sortable_list = [Feedback.id, Feedback.name, Feedback.rating_overall, Feedback.created_at]
     column_default_sort = [(Feedback.created_at, True)]
 
     form_columns = [
         Feedback.name,
         Feedback.phone,
-        Feedback.experience,
-        Feedback.feedback_type,
-        Feedback.product,
-        Feedback.description,
+        Feedback.email,
+        Feedback.address,
+        Feedback.spouse_name,
+        Feedback.anniversary_date,
+        Feedback.spouse_birthday,
+        Feedback.child_birthday,
+        Feedback.about_you,
+        Feedback.rating_designs,
+        Feedback.rating_quality,
+        Feedback.rating_value,
+        Feedback.rating_staff,
+        Feedback.rating_overall,
+        Feedback.words,
+        Feedback.join_update_list,
+        Feedback.visited_recently,
+        Feedback.can_give_references,
+        Feedback.next_visit_pref_1,
+        Feedback.next_visit_pref_2,
     ]
 
     column_labels = {
-        "feedback_type": "Type",
-        "product": "Product Purchased",
-        "created_at": "Created At",
+        "rating_overall": "Overall Rating",
+        "rating_designs": "Designs Rating",
+        "rating_quality": "Quality Rating",
+        "rating_value": "Value Rating",
+        "rating_staff": "Staff Rating",
+        "join_update_list": "Joins Updates?",
+        "visited_recently": "Visited Recently?",
+        "can_give_references": "Can Give Refs?",
+        "next_visit_pref_1": "Next Visit Pref 1",
+        "next_visit_pref_2": "Next Visit Pref 2",
+        "about_you": "About the Customer",
+        "created_at": "Submitted At",
     }
 
     column_formatters = {
-        "created_at": lambda m, a: m.created_at.strftime("%Y-%m-%d %H:%M:%S") if m.created_at else "",
+        "created_at": lambda m, a: m.created_at.strftime("%Y-%m-%d %H:%M") if m.created_at else "",
+        "join_update_list": lambda m, a: "✅ Yes" if m.join_update_list else ("❌ No" if m.join_update_list is False else "—"),
+        "visited_recently": lambda m, a: "✅ Yes" if m.visited_recently else ("❌ No" if m.visited_recently is False else "—"),
+        "can_give_references": lambda m, a: "✅ Yes" if m.can_give_references else ("❌ No" if m.can_give_references is False else "—"),
     }
+
 
 
 class CategoryAdmin(ModelView, model=Category):

@@ -24,6 +24,7 @@ from schemas import (
     BlogOut,
     ItemOut,
     ItemMetalOut,
+    ReferenceEntry,
 )
 
 logger = logging.getLogger(__name__)
@@ -36,15 +37,16 @@ api_router = APIRouter(prefix="/api")
 feedback_router = APIRouter(prefix="/feedback", tags=["feedback"])
 
 
-def _validate_product(db: Session, product_id: int | None) -> None:
-    if product_id is not None and not db.query(Product).filter(Product.id == product_id).first():
-        raise HTTPException(status_code=400, detail=f"Product {product_id} not found")
-
-
 @feedback_router.post("", response_model=FeedbackOut, status_code=201)
 def create_feedback(payload: FeedbackCreate, db: Session = Depends(get_db)):
-    _validate_product(db, payload.product_id)
-    feedback = Feedback(**payload.model_dump())
+    # Convert nested ReferenceEntry objects to plain dicts for JSON storage
+    data = payload.model_dump()
+    if data.get("references"):
+        data["references"] = [
+            ref if isinstance(ref, dict) else ref.model_dump()
+            for ref in (payload.references or [])
+        ]
+    feedback = Feedback(**data)
     db.add(feedback)
     db.commit()
     db.refresh(feedback)
@@ -55,15 +57,15 @@ def create_feedback(payload: FeedbackCreate, db: Session = Depends(get_db)):
 def list_feedback(
     skip: int = 0,
     limit: int = 50,
-    experience: str | None = None,
-    feedback_type: str | None = None,
+    name: str | None = None,
+    phone: str | None = None,
     db: Session = Depends(get_db),
 ):
     query = db.query(Feedback)
-    if experience:
-        query = query.filter(Feedback.experience == experience)
-    if feedback_type:
-        query = query.filter(Feedback.feedback_type == feedback_type)
+    if name:
+        query = query.filter(Feedback.name.ilike(f"%{name}%"))
+    if phone:
+        query = query.filter(Feedback.phone.ilike(f"%{phone}%"))
     return (
         query.order_by(Feedback.created_at.desc())
         .offset(skip)
@@ -87,8 +89,12 @@ def update_feedback(feedback_id: int, payload: FeedbackUpdate, db: Session = Dep
         raise HTTPException(status_code=404, detail="Feedback not found")
 
     data = payload.model_dump(exclude_unset=True)
-    if "product_id" in data:
-        _validate_product(db, data["product_id"])
+    # Serialize nested reference entries
+    if "references" in data and data["references"] is not None:
+        data["references"] = [
+            ref if isinstance(ref, dict) else ref.model_dump()
+            for ref in data["references"]
+        ]
     for key, value in data.items():
         setattr(feedback, key, value)
     db.commit()
