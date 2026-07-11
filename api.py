@@ -415,6 +415,171 @@ def _apply_categories(db: Session, product: Product, category_ids: list[int]) ->
     product.categories = cats
 
 
+import pandas as pd
+import io
+from fastapi import Request
+from starlette.responses import RedirectResponse
+
+@item_router.post("/upload-csv", include_in_schema=False)
+async def upload_products_csv(request: Request, file: UploadFile = File(...), db: Session = Depends(get_db)):
+    if not file.filename.endswith(".csv"):
+        request.session["_messages"] = [("error", "Only CSV files are allowed.")]
+        return RedirectResponse(url="/admin/product/list", status_code=302)
+    
+    try:
+        content = await file.read()
+        df = pd.read_csv(io.BytesIO(content))
+        
+        # Clean column names
+        df.columns = df.columns.str.strip()
+        
+        success_count = 0
+        error_count = 0
+        
+        for _, row in df.iterrows():
+            try:
+                style_no = str(row.get('Style No.', '')).strip()
+                item_name = str(row.get('Item Name', '')).strip()
+                category_name = str(row.get('Category', '')).strip()
+                concept = str(row.get('Concept', '')).strip()
+                
+                # Weight handling
+                weight_val = row.get('Weight(Gr)')
+                weight = float(weight_val) if pd.notna(weight_val) and str(weight_val).strip() != '' else 0.0
+                
+                # If Item Name is missing, fallback to Category
+                if pd.isna(row.get('Item Name')) or not item_name or item_name.lower() == 'nan':
+                    item_name = category_name if category_name and category_name.lower() != 'nan' else 'Unknown Product'
+                
+                # Category Handling
+                category_model = None
+                if category_name and category_name.lower() != 'nan':
+                    category_model = db.query(Category).filter(Category.name.ilike(category_name)).first()
+                    if not category_model:
+                        category_model = Category(name=category_name)
+                        db.add(category_model)
+                        db.flush()
+                
+                # Metal/Karat Handling
+                karat_val = str(row.get('karat', '')).strip()
+                if not karat_val or karat_val.lower() == 'nan':
+                    karat_val = "22K" # Default
+                
+                metal_model = db.query(Metal).filter(Metal.metal == "Gold", Metal.karat == karat_val).first()
+                metal_id = metal_model.id if metal_model else None
+                
+                # Create Product
+                product = Product(
+                    style_no=style_no if style_no and style_no.lower() != 'nan' else None,
+                    name=item_name,
+                    description=concept if concept and concept.lower() != 'nan' else None,
+                    gross_weight=weight,
+                    metal_id=metal_id,
+                    availability=True
+                )
+                
+                if category_model:
+                    product.categories = [category_model]
+                    
+                db.add(product)
+                success_count += 1
+            except Exception as e:
+                logger.error(f"Error parsing row: {e}")
+                error_count += 1
+                
+        db.commit()
+        request.session["_messages"] = [("success", f"Successfully imported {success_count} products. Failed: {error_count}.")]
+    except Exception as e:
+        logger.error(f"CSV Upload failed: {e}")
+        request.session["_messages"] = [("error", "Failed to process the CSV file.")]
+        
+    return RedirectResponse(url="/admin/product/list", status_code=302)
+
+
+import zipfile
+import os
+
+@item_router.post("/upload-images-zip", include_in_schema=False)
+async def upload_zip_images(request: Request, file: UploadFile = File(...), db: Session = Depends(get_db)):
+    if not file.filename.endswith(".zip"):
+        request.session["_messages"] = [("error", "Only ZIP files are allowed.")]
+        return RedirectResponse(url="/admin/product-image/list", status_code=302)
+        
+    success_count = 0
+    skip_count = 0
+    error_count = 0
+    
+    try:
+        content = await file.read()
+        with zipfile.ZipFile(io.BytesIO(content)) as z:
+            for zip_info in z.infolist():
+                if zip_info.is_dir():
+                    continue
+                
+                # Filter out hidden files like .DS_Store or __MACOSX
+                if zip_info.filename.startswith('__MACOSX') or zip_info.filename.split('/')[-1].startswith('.'):
+                    continue
+                    
+                # Check for allowed image extensions
+                ext = os.path.splitext(zip_info.filename)[1].lower()
+                if ext not in ['.jpg', '.jpeg', '.png', '.webp', '.gif']:
+                    continue
+                    
+                try:
+                    # Extract base filename without path or extension (e.g. 'folder/2203(807).jpg' -> '2203(807)')
+                    base_name = zip_info.filename.split("/")[-1].rsplit(".", 1)[0].strip()
+                    
+                    # Find product by style_no
+                    product = db.query(Product).filter(Product.style_no == base_name).first()
+                    if not product:
+                        skip_count += 1
+                        continue
+                        
+                    # Read image data from zip
+                    img_data = z.read(zip_info.filename)
+                    
+                    # Determine content type based on extension
+                    content_types = {
+                        '.jpg': 'image/jpeg',
+                        '.jpeg': 'image/jpeg',
+                        '.png': 'image/png',
+                        '.webp': 'image/webp',
+                        '.gif': 'image/gif'
+                    }
+                    content_type = content_types.get(ext, 'image/jpeg')
+                    
+                    # Upload to Azure directly since we have bytes
+                    blob_name = azure_storage.upload_image(img_data, content_type, prefix="products/")
+                    
+                    # Link to product
+                    db.add(ProductImage(product_id=product.id, blob_name=blob_name))
+                    success_count += 1
+                except Exception as e:
+                    logger.error(f"Failed to process image {zip_info.filename} from zip: {e}")
+                    error_count += 1
+                    
+        db.commit()
+        request.session["_messages"] = [("success", f"Successfully uploaded {success_count} images from ZIP. Skipped: {skip_count} (no matching style no.). Failed: {error_count}.")]
+    except Exception as e:
+        logger.error(f"ZIP Upload failed: {e}")
+        request.session["_messages"] = [("error", "Failed to process the ZIP file.")]
+        
+    return RedirectResponse(url="/admin/product-image/list", status_code=302)
+
+
+@item_router.post("/delete-all", include_in_schema=False)
+async def delete_all_products(request: Request, db: Session = Depends(get_db)):
+    try:
+        db.query(Product).delete()
+        db.commit()
+        request.session["_messages"] = [("success", "Successfully deleted all products.")]
+    except Exception as e:
+        db.rollback()
+        logger.error(f"Failed to delete all products: {e}")
+        request.session["_messages"] = [("error", "Failed to delete all products.")]
+        
+    return RedirectResponse(url="/admin/product/list", status_code=302)
+
 @item_router.post("", response_model=ItemOut, status_code=201)
 async def create_item(
     name: str = Form(..., min_length=1),
@@ -592,6 +757,19 @@ def list_metals(db: Session = Depends(get_db)):
     """Return all metals available in the database."""
     return db.query(Metal).order_by(Metal.id).all()
 
+
+# --- System/Admin operations ---------------------------------------------------
+
+@api_router.post("/rate-refresh", tags=["system"])
+def refresh_metal_rates():
+    """Trigger an immediate fetch and update of gold rates."""
+    from update_metal_rates import fetch_and_update_rates
+    try:
+        fetch_and_update_rates()
+        return {"status": "success", "message": "Metal rates refreshed successfully."}
+    except Exception as e:
+        logger.error(f"Error refreshing metal rates: {e}")
+        raise HTTPException(status_code=500, detail="Failed to refresh metal rates.")
 
 # --- Register all sub-routers on the main api_router -------------------------
 

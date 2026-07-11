@@ -122,7 +122,7 @@ from api import api_router
 app.include_router(api_router)
 
 from sqladmin import Admin
-admin = Admin(app, engine)
+admin = Admin(app, engine, templates_dir="templates")
 
 from db.admin import (
     ProductAdmin, ProductImageAdmin, MetalAdmin, LeadAdmin, GroupAdmin, TemplateStorageAdmin,
