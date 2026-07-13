@@ -54,6 +54,8 @@ class ProductAdmin(ModelView, model=Product):
     name_plural = "Products"
     icon = "fa-solid fa-box"
     
+    list_template = "custom_product_list.html"
+    
     column_list = [
         Product.id,
         Product.style_no,
@@ -130,6 +132,7 @@ class ProductImageAdmin(ModelView, model=ProductImage):
     name = "Product Image"
     name_plural = "Product Images"
     icon = "fa-solid fa-images"
+    list_template = "custom_product_image_list.html"
 
     column_list = [ProductImage.id, ProductImage.product, "preview", ProductImage.created_at]
     column_sortable_list = [ProductImage.id, ProductImage.created_at]

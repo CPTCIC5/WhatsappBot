@@ -2,3 +2,5 @@
 env/
 __pycache__/
 .env.example
+test.db
+*.db
