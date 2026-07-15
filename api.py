@@ -580,6 +580,32 @@ async def delete_all_products(request: Request, db: Session = Depends(get_db)):
         
     return RedirectResponse(url="/admin/product/list", status_code=302)
 
+
+@item_router.post("/bulk-set-metal")
+def bulk_set_metal(
+    metal_id: int,
+    missing_only: bool = False,
+    db: Session = Depends(get_db),
+):
+    """Bulk-assign a metal to products.
+
+    - ``missing_only=False`` (default): set *all* products to the given metal.
+    - ``missing_only=True``: only update products that currently have no metal
+      assigned (metal_id IS NULL).  Use this to backfill products that were
+      imported via CSV before any metals existed in the database.
+    """
+    metal = db.query(Metal).filter(Metal.id == metal_id).first()
+    if not metal:
+        raise HTTPException(status_code=404, detail=f"Metal {metal_id} not found")
+
+    query = db.query(Product)
+    if missing_only:
+        query = query.filter(Product.metal_id == None)  # noqa: E711
+
+    updated = query.update({"metal_id": metal_id}, synchronize_session=False)
+    db.commit()
+    return {"updated": updated, "metal": f"{metal.metal} – {metal.karat}"}
+
 @item_router.post("", response_model=ItemOut, status_code=201)
 async def create_item(
     name: str = Form(..., min_length=1),

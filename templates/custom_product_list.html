@@ -9,6 +9,21 @@
             <div class="card-header">
               <h3 class="card-title">{{ model_view.name_plural }}</h3>
               <div class="ms-auto">
+                {% if model_view.name == "Product" %}
+                {# ── Refresh Metal Rates button ──────────────────────────────────── #}
+                <div class="ms-3 d-inline-block">
+                  <button id="refresh-metal-btn" class="btn btn-outline-warning" onclick="refreshMetalRates(this)">
+                    <i class="fa-solid fa-rotate me-1"></i> Refresh Metal
+                  </button>
+                </div>
+                {# ── Apply Metal to All button ────────────────────────────────────── #}
+                <div class="ms-3 d-inline-block">
+                  <button class="btn btn-outline-info" data-bs-toggle="modal" data-bs-target="#modal-bulk-metal"
+                    onclick="loadMetalsIntoModal()">
+                    <i class="fa-solid fa-gem me-1"></i> Apply Metal to All
+                  </button>
+                </div>
+                {% endif %}
                 {% if model_view.can_export %}
                 {% if model_view.export_types | length > 1 %}
                 <div class="ms-3 d-inline-block dropdown">
@@ -19,8 +34,7 @@
                   <ul class="dropdown-menu" aria-labelledby="dropdownMenuButton1">
                     {% for export_type in model_view.export_types %}
                     <li><a class="dropdown-item"
-                        href="{{ url_for('admin:export', identity=model_view.identity, export_type=export_type) }}">{{
-                        export_type | upper }}</a></li>
+                        href="{{ url_for('admin:export', identity=model_view.identity, export_type=export_type) }}">{{ export_type | upper }}</a></li>
                     {% endfor %}
                   </ul>
                 </div>
@@ -355,14 +369,60 @@
   </div>
   {% endif %}
 
+  {# ── Bulk Metal Assign Modal ──────────────────────────────────────────── #}
+  {% if model_view.name == "Product" %}
+  <div class="modal modal-blur fade" id="modal-bulk-metal" tabindex="-1" role="dialog" aria-hidden="true">
+    <div class="modal-dialog modal-dialog-centered" role="document">
+      <div class="modal-content">
+        <div class="modal-header">
+          <h5 class="modal-title"><i class="fa-solid fa-gem me-2 text-info"></i>Apply Metal to Products</h5>
+          <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+        </div>
+        <div class="modal-body">
+          <p class="text-muted mb-3">
+            Select the metal &amp; karat you want to assign. This will update the
+            <strong>calculated cost</strong> for every affected product.
+          </p>
+          <div class="mb-3">
+            <label class="form-label fw-bold">Metal / Karat</label>
+            <select id="bulk-metal-select" class="form-select">
+              <option value="">Loading metals…</option>
+            </select>
+            <small id="bulk-metal-hint" class="form-hint text-muted"></small>
+          </div>
+          <div class="mb-1">
+            <label class="form-check cursor-pointer">
+              <input class="form-check-input" type="checkbox" id="bulk-missing-only">
+              <span class="form-check-label">
+                <strong>Fill missing metals only</strong>
+                <span class="text-muted d-block small">
+                  Only assign to products that currently have no metal set
+                  (use this to backfill products uploaded via CSV before metals were configured).
+                </span>
+              </span>
+            </label>
+          </div>
+        </div>
+        <div class="modal-footer">
+          <button class="btn btn-link link-secondary me-auto" data-bs-dismiss="modal">Cancel</button>
+          <button id="bulk-metal-confirm-btn" class="btn btn-info" onclick="applyBulkMetal()">
+            <i class="fa-solid fa-check me-1"></i> Apply
+          </button>
+        </div>
+      </div>
+    </div>
+  </div>
+  {% endif %}
+
+  {# ── Toast notification area ─────────────────────────────────────────── #}
+  <div id="toast-container" style="position:fixed;top:1rem;right:1rem;z-index:9999;min-width:280px;"></div>
+
   <script>
+    /* ── Existing: delete-selected wiring ─────────────────────────────── */
     document.addEventListener("DOMContentLoaded", function() {
         var actionDeleteBtn = document.getElementById('action-delete');
         if (actionDeleteBtn) {
-            // Store the original URL on page load
             actionDeleteBtn.setAttribute('data-original-url', actionDeleteBtn.getAttribute('data-url'));
-            
-            // Override jQuery's click event for this button
             $(document).off('click', '#action-delete').on('click', '#action-delete', function(e) {
                 e.preventDefault();
                 var pks = [];
@@ -371,9 +431,7 @@
                     pks.push($(this).siblings().get(0).value);
                   }
                 });
-                
                 if (pks.length === 0) return;
-                
                 var originalUrl = $(this).attr('data-original-url');
                 $(this).data("pk", pks);
                 $(this).data("url", originalUrl + '?pks=' + pks.join(","));
@@ -381,6 +439,123 @@
             });
         }
     });
+
+    /* ── Toast helper ──────────────────────────────────────────────────── */
+    function showToast(message, type) {
+        var color = type === 'success' ? '#2fb344' : type === 'warning' ? '#f76707' : '#d63939';
+        var icon  = type === 'success' ? 'fa-circle-check' : type === 'warning' ? 'fa-triangle-exclamation' : 'fa-circle-xmark';
+        var id    = 'toast-' + Date.now();
+        var html  = '<div id="' + id + '" style="background:' + color + ';color:#fff;padding:12px 18px;' +
+                    'border-radius:8px;margin-bottom:8px;box-shadow:0 4px 16px rgba(0,0,0,.2);' +
+                    'display:flex;align-items:center;gap:10px;font-weight:500;">'+
+                    '<i class="fa-solid ' + icon + '"></i><span>' + message + '</span>' +
+                    '<button onclick="document.getElementById(\'' + id + '\').remove()" ' +
+                    'style="margin-left:auto;background:none;border:none;color:#fff;font-size:1.1rem;cursor:pointer;">&times;</button>' +
+                    '</div>';
+        document.getElementById('toast-container').insertAdjacentHTML('beforeend', html);
+        setTimeout(function() {
+            var el = document.getElementById(id);
+            if (el) el.remove();
+        }, 6000);
+    }
+
+    /* ── Refresh Metal Rates ───────────────────────────────────────────── */
+    function refreshMetalRates(btn) {
+        btn.disabled = true;
+        var orig = btn.innerHTML;
+        btn.innerHTML = '<i class="fa-solid fa-rotate fa-spin me-1"></i> Refreshing…';
+        fetch('/api/rate-refresh', { method: 'POST' })
+            .then(function(r) { return r.json(); })
+            .then(function(data) {
+                if (data.status === 'success') {
+                    showToast('✅ Metal rates refreshed successfully! Reloading prices…', 'success');
+                    setTimeout(function() { location.reload(); }, 1800);
+                } else {
+                    showToast('⚠️ ' + (data.detail || 'Unexpected response from server.'), 'warning');
+                }
+            })
+            .catch(function(err) {
+                showToast('❌ Failed to reach server: ' + err, 'error');
+            })
+            .finally(function() {
+                btn.disabled = false;
+                btn.innerHTML = orig;
+            });
+    }
+
+    /* ── Load metals into the Apply Metal modal ───────────────────────── */
+    function loadMetalsIntoModal() {
+        var sel  = document.getElementById('bulk-metal-select');
+        var hint = document.getElementById('bulk-metal-hint');
+        sel.innerHTML = '<option value="">Loading…</option>';
+        hint.textContent = '';
+        fetch('/api/metals')
+            .then(function(r) { return r.json(); })
+            .then(function(metals) {
+                if (!metals || metals.length === 0) {
+                    sel.innerHTML = '<option value="">No metals configured yet</option>';
+                    hint.textContent = 'Add metals first via the Metals admin section.';
+                    return;
+                }
+                sel.innerHTML = metals.map(function(m) {
+                    var rate = m.rate_per_gram ? ' — ₹' + parseFloat(m.rate_per_gram).toLocaleString('en-IN', {maximumFractionDigits:2}) + '/g' : '';
+                    return '<option value="' + m.id + '">' + m.metal + ' ' + m.karat + rate + '</option>';
+                }).join('');
+                updateMetalHint();
+            })
+            .catch(function() {
+                sel.innerHTML = '<option value="">Failed to load metals</option>';
+            });
+    }
+
+    function updateMetalHint() {
+        var sel  = document.getElementById('bulk-metal-select');
+        var hint = document.getElementById('bulk-metal-hint');
+        var opt  = sel.options[sel.selectedIndex];
+        hint.textContent = opt && opt.value ? 'Selected: ' + opt.text : '';
+    }
+
+    document.addEventListener('DOMContentLoaded', function() {
+        var sel = document.getElementById('bulk-metal-select');
+        if (sel) sel.addEventListener('change', updateMetalHint);
+    });
+
+    /* ── Apply bulk metal assignment ───────────────────────────────────── */
+    function applyBulkMetal() {
+        var metalId     = document.getElementById('bulk-metal-select').value;
+        var missingOnly = document.getElementById('bulk-missing-only').checked;
+        var confirmBtn  = document.getElementById('bulk-metal-confirm-btn');
+
+        if (!metalId) {
+            showToast('Please select a metal first.', 'warning');
+            return;
+        }
+
+        confirmBtn.disabled = true;
+        confirmBtn.innerHTML = '<i class="fa-solid fa-rotate fa-spin me-1"></i> Applying…';
+
+        var url = '/api/items/bulk-set-metal?metal_id=' + metalId + '&missing_only=' + missingOnly;
+        fetch(url, { method: 'POST' })
+            .then(function(r) {
+                if (!r.ok) return r.json().then(function(e) { throw new Error(e.detail || r.statusText); });
+                return r.json();
+            })
+            .then(function(data) {
+                // Close modal
+                var modalEl = document.getElementById('modal-bulk-metal');
+                var modal   = bootstrap.Modal.getInstance(modalEl) || new bootstrap.Modal(modalEl);
+                modal.hide();
+                showToast('✅ Updated ' + data.updated + ' product(s) to ' + data.metal + '. Reloading…', 'success');
+                setTimeout(function() { location.reload(); }, 1800);
+            })
+            .catch(function(err) {
+                showToast('❌ ' + err.message, 'error');
+            })
+            .finally(function() {
+                confirmBtn.disabled = false;
+                confirmBtn.innerHTML = '<i class="fa-solid fa-check me-1"></i> Apply';
+            });
+    }
   </script>
 </div>
 {% endblock %}
