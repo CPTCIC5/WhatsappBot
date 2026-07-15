@@ -1,0 +1,313 @@
+{% extends "sqladmin/layout.html" %}
+{% block content %}
+<div class="col-12">
+  <div class="card">
+    <div class="card-header">
+      <h3 class="card-title">
+        <i class="fa-solid fa-images me-2"></i>New Product Image
+      </h3>
+    </div>
+    <div class="card-body border-bottom py-3">
+      <form id="pi-create-form"
+            action="{{ url_for('admin:create', identity=model_view.identity) }}"
+            method="POST"
+            enctype="multipart/form-data">
+
+        {% if error %}
+        <div class="alert alert-danger" role="alert">{{ error }}</div>
+        {% endif %}
+
+        {# ── Product selector ─────────────────────────────────────────────── #}
+        <div class="mb-4">
+          <label class="form-label fw-bold required">
+            Item <span class="text-muted small">(search by name or style no.)</span>
+          </label>
+
+          {# Hidden field that carries the actual product ID to the form submit #}
+          <input type="hidden" id="product_id_field" name="product" required>
+
+          {# Visible search box #}
+          <div class="input-group" style="max-width:600px;">
+            <span class="input-group-text"><i class="fa-solid fa-magnifying-glass"></i></span>
+            <input
+              type="text"
+              id="product-search-input"
+              class="form-control"
+              placeholder="Type name or style no. (e.g. 2203)"
+              autocomplete="off"
+            >
+            <button type="button" class="btn btn-outline-secondary" id="product-clear-btn" style="display:none;"
+              onclick="clearProductSelection()">
+              <i class="fa-solid fa-times"></i>
+            </button>
+          </div>
+
+          {# Selected product badge #}
+          <div id="selected-product-badge" class="mt-2" style="display:none;">
+            <span class="badge bg-teal-lt fs-6 p-2">
+              <i class="fa-solid fa-check-circle me-1 text-success"></i>
+              <span id="selected-product-label"></span>
+            </span>
+          </div>
+
+          {# Dropdown list #}
+          <div id="product-dropdown"
+               style="display:none; max-height:300px; overflow-y:auto;
+                      border:1px solid #dee2e6; border-top:none; border-radius:0 0 6px 6px;
+                      background:#fff; box-shadow:0 4px 12px rgba(0,0,0,.1);
+                      max-width:600px; z-index:1000; position:relative;">
+          </div>
+          <small class="form-hint text-muted mt-1 d-block">
+            Each row shows: <strong>Product Name (STYLE_NO)</strong>
+          </small>
+        </div>
+
+        {# ── Image file ───────────────────────────────────────────────────── #}
+        <div class="mb-4">
+          <label class="form-label fw-bold required" for="image-file-input">Image File</label>
+          <input type="file"
+                 id="image-file-input"
+                 name="blob_name"
+                 accept="image/*"
+                 class="form-control"
+                 style="max-width:600px;"
+                 required>
+          <small class="form-hint text-muted">Accepted: JPG, PNG, WebP, GIF</small>
+
+          {# Image preview #}
+          <div id="img-preview-wrap" style="display:none; margin-top:10px;">
+            <img id="img-preview" style="max-height:160px; border-radius:8px; border:1px solid #dee2e6;" src="" alt="Preview">
+          </div>
+        </div>
+
+        {# ── Actions ──────────────────────────────────────────────────────── #}
+        <div class="row mt-3">
+          <div class="col-md-2">
+            <a href="{{ url_for('admin:list', identity=model_view.identity) }}" class="btn btn-link">Cancel</a>
+          </div>
+          <div class="col-md-6">
+            <div class="btn-group flex-wrap">
+              <button type="submit" id="save-btn" class="btn btn-primary" disabled>
+                <i class="fa-solid fa-floppy-disk me-1"></i>Save
+              </button>
+            </div>
+          </div>
+        </div>
+
+      </form>
+    </div>
+  </div>
+</div>
+
+<style>
+  .pi-product-option {
+    padding: 9px 14px;
+    cursor: pointer;
+    border-bottom: 1px solid #f1f3f5;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    transition: background .12s;
+  }
+  .pi-product-option:last-child { border-bottom: none; }
+  .pi-product-option:hover { background: #f0f6ff; }
+  .pi-product-option .style-badge {
+    font-family: monospace;
+    font-size: .8rem;
+    background: #e8f0fe;
+    color: #2563eb;
+    padding: 2px 7px;
+    border-radius: 4px;
+    white-space: nowrap;
+    flex-shrink: 0;
+  }
+  .pi-product-option .prod-name {
+    font-weight: 500;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .pi-no-results {
+    padding: 12px 14px;
+    color: #868e96;
+    font-style: italic;
+  }
+</style>
+
+<script>
+(function() {
+  var searchInput   = document.getElementById('product-search-input');
+  var dropdown      = document.getElementById('product-dropdown');
+  var hiddenField   = document.getElementById('product_id_field');
+  var badge         = document.getElementById('selected-product-badge');
+  var badgeLabel    = document.getElementById('selected-product-label');
+  var clearBtn      = document.getElementById('product-clear-btn');
+  var saveBtn       = document.getElementById('save-btn');
+  var fileInput     = document.getElementById('image-file-input');
+  var imgPreviewWrap = document.getElementById('img-preview-wrap');
+  var imgPreview    = document.getElementById('img-preview');
+
+  var debounceTimer = null;
+  var allProducts   = [];    // populated on first focus
+  var loaded        = false;
+
+  /* ── Validate save button state ──────────────────────────────────── */
+  function validateForm() {
+    var hasProduct = hiddenField.value !== '';
+    var hasFile    = fileInput.files && fileInput.files.length > 0;
+    saveBtn.disabled = !(hasProduct && hasFile);
+  }
+
+  fileInput.addEventListener('change', function() {
+    validateForm();
+    if (fileInput.files && fileInput.files[0]) {
+      var reader = new FileReader();
+      reader.onload = function(e) {
+        imgPreview.src = e.target.result;
+        imgPreviewWrap.style.display = 'block';
+      };
+      reader.readAsDataURL(fileInput.files[0]);
+    } else {
+      imgPreviewWrap.style.display = 'none';
+    }
+  });
+
+  /* ── Load all products once on first focus ────────────────────────── */
+  function ensureLoaded(cb) {
+    if (loaded) { cb(allProducts); return; }
+    fetch('/api/items/search?limit=200')
+      .then(function(r) { return r.json(); })
+      .then(function(data) {
+        allProducts = data;
+        loaded = true;
+        cb(allProducts);
+      })
+      .catch(function() { cb([]); });
+  }
+
+  /* ── Render dropdown options ──────────────────────────────────────── */
+  function renderOptions(products) {
+    if (!products || products.length === 0) {
+      dropdown.innerHTML = '<div class="pi-no-results">No products found</div>';
+    } else {
+      dropdown.innerHTML = products.map(function(p) {
+        var styleText = p.style_no ? p.style_no : '—';
+        return '<div class="pi-product-option" data-id="' + p.id + '" data-label="' + escHtml(p.name) + ' (' + escHtml(styleText) + ')">' +
+               '<span class="prod-name">' + escHtml(p.name) + '</span>' +
+               '<span class="style-badge">' + escHtml(styleText) + '</span>' +
+               '</div>';
+      }).join('');
+
+      // Click handlers
+      dropdown.querySelectorAll('.pi-product-option').forEach(function(el) {
+        el.addEventListener('mousedown', function(e) {
+          e.preventDefault(); // prevent blur from firing first
+          selectProduct(el.getAttribute('data-id'), el.getAttribute('data-label'));
+        });
+      });
+    }
+    dropdown.style.display = 'block';
+  }
+
+  /* ── Filter in-memory then re-render ──────────────────────────────── */
+  function filterAndShow(q) {
+    var ql = q.toLowerCase().trim();
+    var filtered = ql
+      ? allProducts.filter(function(p) {
+          return p.name.toLowerCase().indexOf(ql) !== -1 ||
+                 (p.style_no && p.style_no.toLowerCase().indexOf(ql) !== -1);
+        })
+      : allProducts;
+    renderOptions(filtered.slice(0, 60));
+  }
+
+  /* ── Select a product ──────────────────────────────────────────────── */
+  function selectProduct(id, label) {
+    hiddenField.value = id;
+    searchInput.value = label;
+    badgeLabel.textContent = label;
+    badge.style.display = 'block';
+    clearBtn.style.display = '';
+    dropdown.style.display = 'none';
+    validateForm();
+  }
+
+  /* ── Clear selection ───────────────────────────────────────────────── */
+  window.clearProductSelection = function() {
+    hiddenField.value = '';
+    searchInput.value = '';
+    badge.style.display = 'none';
+    clearBtn.style.display = 'none';
+    validateForm();
+  };
+
+  /* ── Events ────────────────────────────────────────────────────────── */
+  searchInput.addEventListener('focus', function() {
+    ensureLoaded(function(products) {
+      filterAndShow(searchInput.value);
+    });
+  });
+
+  searchInput.addEventListener('input', function() {
+    clearTimeout(debounceTimer);
+    // If user edits the field after selecting, clear selection
+    if (hiddenField.value !== '') {
+      hiddenField.value = '';
+      badge.style.display = 'none';
+      clearBtn.style.display = 'none';
+      validateForm();
+    }
+    debounceTimer = setTimeout(function() {
+      ensureLoaded(function() {
+        filterAndShow(searchInput.value);
+      });
+    }, 120);
+  });
+
+  searchInput.addEventListener('blur', function() {
+    // Small delay so mousedown on an option fires first
+    setTimeout(function() { dropdown.style.display = 'none'; }, 180);
+  });
+
+  searchInput.addEventListener('keydown', function(e) {
+    if (e.key === 'Escape') { dropdown.style.display = 'none'; }
+    if (e.key === 'Enter') {
+      // Select first visible option on Enter
+      var first = dropdown.querySelector('.pi-product-option');
+      if (first) {
+        selectProduct(first.getAttribute('data-id'), first.getAttribute('data-label'));
+      }
+      e.preventDefault();
+    }
+    if (e.key === 'ArrowDown') {
+      var opts = dropdown.querySelectorAll('.pi-product-option');
+      if (opts.length) { opts[0].focus(); }
+      e.preventDefault();
+    }
+  });
+
+  /* ── Keyboard nav inside dropdown ─────────────────────────────────── */
+  dropdown.addEventListener('keydown', function(e) {
+    var opts = Array.from(dropdown.querySelectorAll('.pi-product-option'));
+    var idx  = opts.indexOf(document.activeElement);
+    if (e.key === 'ArrowDown' && idx < opts.length - 1) { opts[idx + 1].focus(); e.preventDefault(); }
+    if (e.key === 'ArrowUp')  {
+      if (idx > 0) { opts[idx - 1].focus(); }
+      else         { searchInput.focus(); }
+      e.preventDefault();
+    }
+    if (e.key === 'Enter' && idx !== -1) {
+      selectProduct(opts[idx].getAttribute('data-id'), opts[idx].getAttribute('data-label'));
+      e.preventDefault();
+    }
+    if (e.key === 'Escape') { dropdown.style.display = 'none'; searchInput.focus(); }
+  });
+
+  /* ── HTML escape helper ────────────────────────────────────────────── */
+  function escHtml(s) {
+    return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+  }
+
+})();
+</script>
+{% endblock %}

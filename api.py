@@ -690,6 +690,22 @@ def list_items(
     return [_serialize_item(p) for p in items]
 
 
+@item_router.get("/search", include_in_schema=False)
+def search_items_autocomplete(
+    q: str = "",
+    limit: int = 100,
+    db: Session = Depends(get_db),
+):
+    """Lightweight product search for admin autocomplete (returns id, name, style_no only)."""
+    query = db.query(Product.id, Product.name, Product.style_no)
+    if q:
+        query = query.filter(
+            Product.name.ilike(f"%{q}%") | Product.style_no.ilike(f"%{q}%")
+        )
+    rows = query.order_by(Product.style_no.nulls_last(), Product.name).limit(min(limit, 200)).all()
+    return [{"id": r.id, "name": r.name, "style_no": r.style_no or ""} for r in rows]
+
+
 @item_router.get("/{item_id}", response_model=ItemOut)
 def get_item(item_id: int, db: Session = Depends(get_db)):
     product = db.query(Product).filter(Product.id == item_id).first()

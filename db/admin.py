@@ -102,11 +102,10 @@ class ProductAdmin(ModelView, model=Product):
         "images": lambda m, a: _product_thumbs(m),
     }
 
-    async def scaffold_form(self, rules=None):
-        """Add a multi-file 'Add Images' field to the product form."""
-        form_class = await super().scaffold_form(rules)
-        form_class.upload_images = MultipleFileField("Add Images")
-        return form_class
+    # No 'Add Images' field on the create/edit form — images are managed from
+    # the "Product Images" admin section (ProductImageAdmin).
+    # The after_model_change hook below is kept for safety but will never fire
+    # unless someone manually adds upload_images back.
 
     async def after_model_change(self, data, model, is_created, request):
         """Upload any files chosen in 'Add Images' and attach them to the product."""
@@ -133,6 +132,7 @@ class ProductImageAdmin(ModelView, model=ProductImage):
     name_plural = "Product Images"
     icon = "fa-solid fa-images"
     list_template = "custom_product_image_list.html"
+    create_template = "product_image_create.html"
 
     column_list = [ProductImage.id, ProductImage.product, "preview", ProductImage.created_at]
     column_sortable_list = [ProductImage.id, ProductImage.created_at]
