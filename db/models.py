@@ -207,6 +207,16 @@ class Lead(Base):
     # for the customer to send the friend's contact/number to refer)
     pending_intent = Column(String, nullable=True)
 
+    # Template onboarding flow: welcome → occasion → budget → trust → category
+    flow_stage = Column(String, nullable=True)
+
+    # Preferences captured during the WhatsApp template onboarding flow
+    occasion = Column(String, nullable=True)
+    budget_label = Column(String, nullable=True)
+    budget_min = Column(Float, nullable=True)
+    budget_max = Column(Float, nullable=True)
+    preferred_category = Column(String, nullable=True)
+
     groups = relationship("Group", secondary=group_leads, back_populates="leads")
 
     # Referrals this customer has made (they are the referrer)

@@ -4,7 +4,7 @@ from sqlalchemy.orm import Session, joinedload
 from dotenv import load_dotenv
 import os
 import json
-from db.models import Product as ProductModel, Metal as MetalModel, Lead as LeadModel, SessionLocal
+from db.models import Product as ProductModel, Metal as MetalModel, Lead as LeadModel, Category as CategoryModel, SessionLocal
 from pydantic import BaseModel
 from send_msg import send_img
 
@@ -125,6 +125,16 @@ def get_products_by_availability(db: Session, available: bool):
         db.query(ProductModel)
         .options(joinedload(ProductModel.metal_info))
         .filter(ProductModel.availability == available)
+    )
+    return _products_to_response(q.all())
+
+
+def get_products_by_category(db: Session, category: str):
+    """Get products whose category name matches (case-insensitive partial)."""
+    q = (
+        db.query(ProductModel)
+        .options(joinedload(ProductModel.metal_info), joinedload(ProductModel.images))
+        .filter(ProductModel.categories.any(CategoryModel.name.ilike(f"%{category}%")))
     )
     return _products_to_response(q.all())
 
@@ -281,6 +291,20 @@ PRODUCT_TOOLS = [
     },
     {
         "type": "function",
+        "name": "get_products_by_category",
+        "description": "Get products in a jewellery category (e.g. Rings, Necklaces, Earrings). Use the customer's preferred category when they have one from onboarding.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "category": {"type": "string", "description": "Category name to search for."},
+            },
+            "required": ["category"],
+            "additionalProperties": False,
+        },
+        "strict": True,
+    },
+    {
+        "type": "function",
         "name": "send_product_image",
         "description": "Send a product image to the user via WhatsApp. Use when user asks to see an image, photo, or picture of a product.",
         "parameters": {
@@ -336,6 +360,8 @@ def _handle_tool_call(db: Session, name: str, arguments: dict, user_phone: str |
             )
         elif name == "get_products_by_availability":
             out = get_products_by_availability(db, arguments["available"])
+        elif name == "get_products_by_category":
+            out = get_products_by_category(db, arguments["category"])
         elif name == "send_product_image":
             if not user_phone:
                 out = {"success": False, "error": "User phone number not available"}
@@ -370,13 +396,6 @@ def chat_with_assistant(lead_id: int | None, content: str) -> str:
     db = SessionLocal()
     try:
         ensure_leads_from_message(db, content)
-
-        # Get user phone from lead
-        user_phone: str | None = None
-        if lead_id is not None:
-            lead = db.query(LeadModel).filter(LeadModel.id == lead_id).first()
-            if lead:
-                user_phone = lead.phone
 
         developer_instruction = (
             "You're a friendly jewelry shop representative helping customers discover beautiful pieces. Your goal is marketing and awareness, not aggressive selling.\n\n"
@@ -417,20 +436,44 @@ def chat_with_assistant(lead_id: int | None, content: str) -> str:
             "relay its message so they can email the team. Do NOT invent answers.\n\n"
             "Remember: You're here to help them discover jewelry that tells their story. Connect pieces to their emotions and life moments."
         )
+
+        # Get user phone from lead
+        user_phone: str | None = None
+        lead = None
+        if lead_id is not None:
+            lead = db.query(LeadModel).filter(LeadModel.id == lead_id).first()
+            if lead:
+                user_phone = lead.phone
+                prefs = []
+                if lead.occasion:
+                    prefs.append(f"- Occasion: {lead.occasion}")
+                if lead.budget_label:
+                    prefs.append(f"- Budget: {lead.budget_label}")
+                if lead.budget_min is not None:
+                    prefs.append(f"- Budget min: {lead.budget_min}")
+                if lead.budget_max is not None:
+                    prefs.append(f"- Budget max: {lead.budget_max}")
+                if lead.preferred_category:
+                    prefs.append(f"- Category: {lead.preferred_category}")
+                if prefs:
+                    developer_instruction += (
+                        "\n\nThis customer's onboarding preferences:\n"
+                        + "\n".join(prefs)
+                        + "\nWhen they ask for pieces, prefer get_products_by_category "
+                        "and get_products_by_price using these. Send images of matches."
+                    )
         tools = [{"type": "web_search", "filters": {"allowed_domains": ["ridra.in"]}}] + PRODUCT_TOOLS
 
         # Resolve conversation id from lead (Responses API conversation stored in thread_id)
         conversation_id: str | None = None
-        if lead_id is not None:
-            lead = db.query(LeadModel).filter(LeadModel.id == lead_id).first()
-            if lead and lead.thread_id:
-                conversation_id = lead.thread_id
-            elif lead:
-                # Old lead without thread_id: create conversation and persist
-                new_conv = client.conversations.create()
-                conversation_id = new_conv.id
-                lead.thread_id = new_conv.id
-                db.commit()
+        if lead and lead.thread_id:
+            conversation_id = lead.thread_id
+        elif lead:
+            # Old lead without thread_id: create conversation and persist
+            new_conv = client.conversations.create()
+            conversation_id = new_conv.id
+            lead.thread_id = new_conv.id
+            db.commit()
 
         # With conversation: pass only new user message; API prepends conversation history.
         # Without: build full input list so tool-call rounds keep context.

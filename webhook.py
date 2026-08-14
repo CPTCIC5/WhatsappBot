@@ -59,6 +59,7 @@ async def webhook(request: Request, background_tasks: BackgroundTasks):
             .get("value", {})
             .get("messages", [{}])[0]
         )
+        print(f"[FLOW] inbound from {wa_id} type={message.get('type')} message={message}", flush=True)
 
         # Only act on real inbound messages from a known sender (ignore status
         # callbacks and empty payloads).

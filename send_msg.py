@@ -478,13 +478,33 @@ async def send_img_async(recipient_phone: str, link: str, caption: str = ""):
     })
 
 
+async def send_document_async(
+    recipient_phone: str,
+    link: str,
+    filename: str = "document.pdf",
+    caption: str = "",
+):
+    """Send a document (PDF) via a public URL."""
+    document = {"link": link, "filename": filename}
+    if caption:
+        document["caption"] = caption
+    return await _post_async({
+        "messaging_product": "whatsapp",
+        "recipient_type": "individual",
+        "to": recipient_phone,
+        "type": "document",
+        "document": document,
+    })
+
+
 async def send_template_async(
     recipient_phone: str,
     template_name: str,
     language_code: str = "en_US",
-    body_parameters: list | None = None,
-    header_media_url: str | None = None,
-    header_media_type: str = "image",
+    body_parameters: dict = None,             # e.g. {"name": "Aryan", "jewel": "Necklace Set"}
+    header_media_url: str = None,             # e.g. "https://example.com/image.jpg"
+    header_media_type: str = "image",         # "image", "video", or "document"
+    use_named_parameters: bool = True,        # Set to True for named parameters, False for positional
 ):
     """Send a WhatsApp approved template to a single recipient (async).
 
@@ -492,23 +512,47 @@ async def send_template_async(
         recipient_phone: recipient WhatsApp number
         template_name: name of the approved template (e.g. "welcome_template")
         language_code: template language code
-        body_parameters: optional list of text values for body {{1}}, {{2}}...
+        body_parameters: Dict of parameter names and values for the body
         header_media_url: optional media URL for a dynamic header
         header_media_type: "image", "video", or "document"
+        use_named_parameters: Whether to use named parameters (True) or positional (False)
     """
     components = []
+
     if header_media_url:
         components.append({
             "type": "header",
             "parameters": [
-                {"type": header_media_type, header_media_type: {"link": header_media_url}}
-            ],
+                {
+                    "type": header_media_type,
+                    header_media_type: {
+                        "link": header_media_url
+                    }
+                }
+            ]
         })
+
     if body_parameters:
-        components.append({
-            "type": "body",
-            "parameters": [{"type": "text", "text": str(v)} for v in body_parameters],
-        })
+        body_params_list = []
+        for param_name, param_value in body_parameters.items():
+            if param_value:
+                if use_named_parameters:
+                    body_params_list.append({
+                        "type": "text",
+                        "text": str(param_value),
+                        "parameter_name": param_name
+                    })
+                else:
+                    body_params_list.append({
+                        "type": "text",
+                        "text": str(param_value)
+                    })
+
+        if body_params_list:
+            components.append({
+                "type": "body",
+                "parameters": body_params_list
+            })
 
     template: dict = {"name": template_name, "language": {"code": language_code}}
     if components:

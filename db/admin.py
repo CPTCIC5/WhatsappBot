@@ -180,7 +180,8 @@ class LeadAdmin(ModelView, model=Lead):
     icon = "fa-solid fa-user"
 
     column_list = [
-        Lead.id, Lead.name, Lead.tag, Lead.onboarding_state,
+        Lead.id, Lead.name, Lead.tag, Lead.onboarding_state, Lead.flow_stage,
+        Lead.occasion, Lead.budget_label, Lead.preferred_category,
         Lead.referral_code, Lead.email, Lead.phone, Lead.created_at,
     ]
     column_searchable_list = [Lead.name, Lead.email, Lead.phone, Lead.referral_code]
@@ -189,13 +190,17 @@ class LeadAdmin(ModelView, model=Lead):
 
     form_columns = [
         Lead.name, Lead.tag, Lead.onboarding_state, Lead.email, Lead.phone,
-        Lead.referral_code,
+        Lead.referral_code, Lead.occasion, Lead.budget_label,
+        Lead.budget_min, Lead.budget_max, Lead.preferred_category,
     ]
 
     column_labels = {
         "created_at": "Created At",
         "onboarding_state": "Onboarding",
+        "flow_stage": "Flow",
         "referral_code": "Referral Code",
+        "budget_label": "Budget",
+        "preferred_category": "Category",
     }
 
 
