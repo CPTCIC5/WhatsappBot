@@ -1,7 +1,7 @@
 from dotenv import load_dotenv
 import os
 import requests
-from db.models import get_db, Group
+from db.models import get_db, Group, TemplateStorage, Lead
 
 load_dotenv()
 
@@ -283,6 +283,17 @@ def send_template_to_group(
         if not group.leads:
             return {"error": f"Group '{group.name}' has no leads"}
 
+        row = _resolve_template_instance(db, template_name)
+        if row:
+            template_name = row.template_name
+            language_code = row.language_code or language_code
+            use_named_parameters = bool(row.use_named_parameters)
+            if header_media_url is None:
+                header_media_url = _header_url_from_row(row)
+                header_media_type = row.header_media_type or header_media_type
+            if body_parameters is None:
+                body_parameters = row.body_parameters
+
         results = {
             "group_name": group.name,
             "template_name": template_name,
@@ -316,29 +327,28 @@ def send_template_to_group(
                     ]
                 })
 
-            # Body component (text parameters)
-            if body_parameters:
+            # Body component (text parameters) — fill {first_name} etc. per lead
+            lead_body = (
+                _fill_instance_body_parameters(body_parameters, lead)
+                if body_parameters
+                else None
+            )
+            if lead_body:
                 body_params_list = []
-                for param_name, param_value in body_parameters.items():
-                    # Auto-fetch lead name if parameter name is "name" and value is empty
-                    if param_name.lower() == "name" and not param_value:
-                        param_value = lead.name
-                    
-                    # Only add if value is not empty
-                    if param_value:
-                        if use_named_parameters:
-                            # Named parameter format (newer WhatsApp API)
-                            body_params_list.append({
-                                "type": "text",
-                                "text": str(param_value),
-                                "parameter_name": param_name
-                            })
-                        else:
-                            # Positional parameter format (older WhatsApp API)
-                            body_params_list.append({
-                                "type": "text",
-                                "text": str(param_value)
-                            })
+                for param_name, param_value in lead_body.items():
+                    if not param_value:
+                        continue
+                    if use_named_parameters:
+                        body_params_list.append({
+                            "type": "text",
+                            "text": str(param_value),
+                            "parameter_name": param_name
+                        })
+                    else:
+                        body_params_list.append({
+                            "type": "text",
+                            "text": str(param_value)
+                        })
                 
                 if body_params_list:
                     components.append({
@@ -564,6 +574,205 @@ async def send_template_async(
         "type": "template",
         "template": template,
     })
+
+
+def _resolve_template_instance(db, instance: str | int) -> TemplateStorage | None:
+    """Look up a registered template by slug, Meta name, or row id."""
+    if isinstance(instance, int) or (isinstance(instance, str) and instance.isdigit()):
+        row = db.query(TemplateStorage).filter(TemplateStorage.id == int(instance)).first()
+        if row:
+            return row
+    if not isinstance(instance, str):
+        return None
+    row = (
+        db.query(TemplateStorage)
+        .filter(TemplateStorage.slug == instance, TemplateStorage.is_active.is_(True))
+        .first()
+    )
+    if row:
+        return row
+    return (
+        db.query(TemplateStorage)
+        .filter(
+            TemplateStorage.template_name == instance,
+            TemplateStorage.is_active.is_(True),
+        )
+        .first()
+    )
+
+
+def _header_url_from_row(row: TemplateStorage) -> str | None:
+    blob_or_url = row.header_image_blob or row.header_media_url
+    if not blob_or_url:
+        return None
+    import azure_storage
+    return azure_storage.resolve_url(blob_or_url)
+
+
+def _fill_instance_body_parameters(raw, lead: Lead | None) -> dict | None:
+    """Fill {first_name}/{name}/... placeholders from the lead when present."""
+    if not raw or not isinstance(raw, dict):
+        return None
+    first = "there"
+    if lead and lead.name:
+        first = lead.name.split(" ")[0]
+    mapping = {
+        "first_name": first,
+        "name": first,
+        "phone": (lead.phone if lead else "") or "",
+        "occasion": (lead.occasion if lead else "") or "",
+        "budget": (lead.budget_label if lead else "") or "",
+        "category": (lead.preferred_category if lead else "") or "",
+    }
+    filled = {}
+    for key, value in raw.items():
+        if value is None or value == "":
+            if str(key).lower() == "name":
+                filled[str(key)] = first
+            continue
+        text = str(value)
+        for placeholder, replacement in mapping.items():
+            text = text.replace("{" + placeholder + "}", replacement)
+        filled[str(key)] = text
+    return filled or None
+
+
+async def send_template_by_template_instance(
+    recipient_phone: str,
+    instance: str | int,
+    body_parameters: dict | None = None,
+):
+    """Send a WhatsApp template using a row from the Templates table.
+
+    Looks up the registered instance by slug, Meta template name, or row id,
+    then sends with that row's language, header image, and body params.
+    Stored placeholders like {first_name} are filled from the matching lead.
+
+    Args:
+        recipient_phone: recipient WhatsApp number
+        instance: slug (e.g. "welcome"), Meta name (e.g. "independence_day_template"),
+            or TemplateStorage id
+        body_parameters: optional override; if omitted, uses the stored JSON (if any)
+    """
+    db = next(get_db())
+    try:
+        row = _resolve_template_instance(db, instance)
+        if not row:
+            raise ValueError(f"No active template instance found for {instance!r}")
+        if not row.template_name:
+            raise ValueError(f"Template instance {instance!r} has no Meta template_name")
+
+        header_url = _header_url_from_row(row)
+
+        digits = "".join(ch for ch in str(recipient_phone) if ch.isdigit())
+        lead = None
+        if digits:
+            lead = (
+                db.query(Lead)
+                .filter(Lead.phone.like(f"%{digits[-10:]}"))
+                .first()
+            )
+
+        if body_parameters is not None:
+            params = body_parameters
+        else:
+            params = _fill_instance_body_parameters(row.body_parameters, lead)
+
+        return await send_template_async(
+            recipient_phone=recipient_phone,
+            template_name=row.template_name,
+            language_code=row.language_code or "en_US",
+            body_parameters=params,
+            header_media_url=header_url,
+            header_media_type=row.header_media_type or "image",
+            use_named_parameters=bool(row.use_named_parameters),
+        )
+    finally:
+        db.close()
+
+
+async def send_template_instance_to_group(
+    group_id: int,
+    instance: str | int,
+    body_parameters: dict | None = None,
+    header_media_url: str | None = None,
+):
+    """Send a registered Templates-table row to every lead in a group.
+
+    Header image, language, named params, and body placeholders ({first_name}, …)
+    come from the instance. Each lead gets their own filled body values.
+    """
+    db = next(get_db())
+    try:
+        group = db.query(Group).filter(Group.id == group_id).first()
+        if not group:
+            return {"error": f"Group with ID {group_id} not found"}
+        if not group.leads:
+            return {"error": f"Group '{group.name}' has no leads"}
+
+        row = _resolve_template_instance(db, instance)
+        if not row or not row.template_name:
+            return {"error": f"No active template instance found for {instance!r}"}
+
+        header_url = (
+            header_media_url
+            if header_media_url
+            else _header_url_from_row(row)
+        )
+        body_raw = (
+            body_parameters if body_parameters is not None else row.body_parameters
+        )
+        leads = list(group.leads)
+
+        results = {
+            "group_name": group.name,
+            "template_name": row.template_name,
+            "slug": row.slug,
+            "total_leads": len(leads),
+            "successful": 0,
+            "failed": 0,
+            "details": [],
+        }
+
+        for lead in leads:
+            filled = _fill_instance_body_parameters(body_raw, lead) if body_raw else None
+            try:
+                resp = await send_template_async(
+                    recipient_phone=lead.phone,
+                    template_name=row.template_name,
+                    language_code=row.language_code or "en_US",
+                    body_parameters=filled,
+                    header_media_url=header_url,
+                    header_media_type=row.header_media_type or "image",
+                    use_named_parameters=bool(row.use_named_parameters),
+                )
+                if resp.status_code == 200:
+                    results["successful"] += 1
+                    results["details"].append({
+                        "lead": lead.name,
+                        "phone": lead.phone,
+                        "status": "success",
+                    })
+                else:
+                    results["failed"] += 1
+                    results["details"].append({
+                        "lead": lead.name,
+                        "phone": lead.phone,
+                        "status": "failed",
+                        "error": resp.text,
+                    })
+            except Exception as e:
+                results["failed"] += 1
+                results["details"].append({
+                    "lead": lead.name,
+                    "phone": lead.phone,
+                    "status": "failed",
+                    "error": str(e),
+                })
+
+        return results
+    finally:
+        db.close()
 
 
 async def send_interactive_buttons(

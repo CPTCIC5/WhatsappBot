@@ -23,7 +23,7 @@ from datetime import datetime
 
 from sqlalchemy.orm import joinedload
 
-from db.models import SessionLocal, Lead, Referral, Product, Category, Metal
+from db.models import SessionLocal, Lead, Referral, Product, Category, Metal, TemplateStorage
 from send_msg import (
     send_txt_msg_async,
     send_interactive_buttons,
@@ -218,7 +218,100 @@ def parse_budget(text: str) -> tuple[float | None, float | None]:
     return None, nums[0]
 
 
-async def _send_flow_template(lead: Lead, template_name: str, **kwargs) -> bool:
+def _lead_placeholders(lead: Lead) -> dict[str, str]:
+    first = _first_name(lead)
+    return {
+        "first_name": first,
+        "name": first,
+        "phone": lead.phone or "",
+        "occasion": lead.occasion or "",
+        "budget": lead.budget_label or "",
+        "category": lead.preferred_category or "",
+    }
+
+
+def _fill_body_parameters(raw, lead: Lead) -> dict | None:
+    """Turn stored JSON body params into Meta values, filling {placeholders}."""
+    if not raw:
+        return None
+    if isinstance(raw, str):
+        import json
+
+        try:
+            raw = json.loads(raw)
+        except Exception:
+            return None
+    if not isinstance(raw, dict):
+        return None
+    mapping = _lead_placeholders(lead)
+    filled: dict[str, str] = {}
+    for key, value in raw.items():
+        if value is None or value == "":
+            continue
+        text = str(value)
+        for placeholder, replacement in mapping.items():
+            text = text.replace("{" + placeholder + "}", replacement)
+        filled[str(key)] = text
+    return filled or None
+
+
+def _template_header_url(row: TemplateStorage) -> str | None:
+    import azure_storage
+
+    return azure_storage.resolve_url(row.header_image_blob or row.header_media_url)
+
+
+_FLOW_SLUG_FALLBACK = {
+    "welcome": WELCOME_TEMPLATE_NAME,
+    "occasion": OCCASION_TEMPLATE_NAME,
+    "budget": BUDGET_TEMPLATE_NAME,
+    "trust": TRUST_TEMPLATE_NAME,
+    "category": CATEGORY_TEMPLATE_NAME,
+}
+
+
+async def _send_registered_template(db, lead: Lead, slug: str, **overrides) -> bool:
+    """Send the Meta template registered under `slug`, with hardcoded fallback."""
+    row = (
+        db.query(TemplateStorage)
+        .filter(TemplateStorage.slug == slug, TemplateStorage.is_active.is_(True))
+        .first()
+    )
+    if row and row.template_name:
+        kwargs: dict = {
+            "use_named_parameters": bool(row.use_named_parameters),
+        }
+        body = _fill_body_parameters(row.body_parameters, lead)
+        if body:
+            kwargs["body_parameters"] = body
+        header = _template_header_url(row)
+        if header:
+            kwargs["header_media_url"] = header
+            kwargs["header_media_type"] = row.header_media_type or "image"
+        kwargs.update({k: v for k, v in overrides.items() if v is not None})
+        _flow_log(f"DB TEMPLATE slug={slug} meta={row.template_name}")
+        return await _send_flow_template(
+            lead,
+            row.template_name,
+            language_code=row.language_code or TEMPLATE_LANG,
+            **kwargs,
+        )
+
+    fallback_name = _FLOW_SLUG_FALLBACK.get(slug)
+    if not fallback_name:
+        _flow_log(f"No registered or fallback template for slug={slug}")
+        return False
+    kwargs = {k: v for k, v in overrides.items() if v is not None}
+    if slug == "welcome":
+        kwargs.setdefault("body_parameters", {"name": _first_name(lead)})
+        kwargs.setdefault(
+            "header_media_url", WELCOME_HEADER_MEDIA_URL or ONBOARDING_POSTER_URL or None
+        )
+    _flow_log(f"FALLBACK TEMPLATE slug={slug} meta={fallback_name}")
+    return await _send_flow_template(lead, fallback_name, **kwargs)
+
+
+async def _send_flow_template(lead: Lead, template_name: str, language_code: str | None = None, **kwargs) -> bool:
     _flow_log(
         f"SEND TEMPLATE '{template_name}' → {lead.phone} "
         f"kwargs={ {k: v for k, v in kwargs.items() if v} }"
@@ -227,7 +320,7 @@ async def _send_flow_template(lead: Lead, template_name: str, **kwargs) -> bool:
         resp = await send_template_async(
             recipient_phone=lead.phone,
             template_name=template_name,
-            language_code=TEMPLATE_LANG,
+            language_code=language_code or TEMPLATE_LANG,
             **kwargs,
         )
         _flow_log(
@@ -320,7 +413,7 @@ def _products_for_category_budget(db, category: Category, lead: Lead, limit: int
 
 
 async def _send_occasion(db, lead: Lead) -> None:
-    if await _send_flow_template(lead, OCCASION_TEMPLATE_NAME):
+    if await _send_registered_template(db, lead, "occasion"):
         lead.flow_stage = FLOW_OCCASION
         db.commit()
         return
@@ -333,7 +426,7 @@ async def _send_occasion(db, lead: Lead) -> None:
 
 
 async def _send_budget(db, lead: Lead) -> None:
-    if await _send_flow_template(lead, BUDGET_TEMPLATE_NAME):
+    if await _send_registered_template(db, lead, "budget"):
         lead.flow_stage = FLOW_BUDGET
         db.commit()
         return
@@ -346,7 +439,7 @@ async def _send_budget(db, lead: Lead) -> None:
 
 
 async def _send_trust(db, lead: Lead) -> None:
-    if await _send_flow_template(lead, TRUST_TEMPLATE_NAME):
+    if await _send_registered_template(db, lead, "trust"):
         lead.flow_stage = FLOW_TRUST
         db.commit()
         return
@@ -359,7 +452,7 @@ async def _send_trust(db, lead: Lead) -> None:
 
 
 async def _send_category(db, lead: Lead) -> None:
-    if await _send_flow_template(lead, CATEGORY_TEMPLATE_NAME):
+    if await _send_registered_template(db, lead, "category"):
         lead.flow_stage = FLOW_CATEGORY
         db.commit()
         return
@@ -434,12 +527,7 @@ async def send_welcome(db, lead: Lead) -> None:
         f"STEP send_welcome() first-contact lead={lead.phone} "
         f"name={lead.name!r} state={lead.onboarding_state}"
     )
-    sent = await _send_flow_template(
-        lead,
-        WELCOME_TEMPLATE_NAME,
-        body_parameters={"name": _first_name(lead)},
-        header_media_url=WELCOME_HEADER_MEDIA_URL or None,
-    )
+    sent = await _send_registered_template(db, lead, "welcome")
     if not sent:
         await _send_welcome_menu(lead)
 

@@ -97,7 +97,7 @@ class Product(Base):
         return 0.0
 
     def __repr__(self):
-        return self.name
+        return self.name or self.style_no or f"Product #{self.id}"
 
 
 # Association table for Product <-> Category (many-to-many)
@@ -120,7 +120,7 @@ class Category(Base):
     products = relationship("Product", secondary="product_categories", back_populates="categories")
 
     def __repr__(self):
-        return self.name
+        return self.name or f"Category #{self.id}"
 
 
 class ProductImage(Base):
@@ -136,7 +136,7 @@ class ProductImage(Base):
     product = relationship("Product", back_populates="images")
 
     def __repr__(self):
-        return self.blob_name
+        return self.blob_name or f"Image #{self.id}"
 
 
 class Review(Base):
@@ -169,7 +169,7 @@ class Blog(Base):
     created_at = Column(DateTime, default=datetime.utcnow)
 
     def __repr__(self):
-        return self.heading
+        return self.heading or f"Blog #{self.id}"
     
 
 
@@ -227,7 +227,7 @@ class Lead(Base):
     )
 
     def __repr__(self):
-        return self.name
+        return self.name or self.phone or f"Lead #{self.id}"
 
 
 class Referral(Base):
@@ -281,7 +281,7 @@ class Group(Base):
     leads = relationship("Lead", secondary=group_leads, back_populates="groups")
 
     def __repr__(self):
-        return self.name
+        return self.name or f"Group #{self.id}"
 
 """
 # Create a group and add leads
@@ -297,15 +297,31 @@ db.commit()
 """
 
 class TemplateStorage(Base):
-    __tablename__= "template_storage"
+    """Reusable WhatsApp Cloud API template registered from Meta.
 
-    id= Column(Integer, primary_key=True, index=True)
-    template_name = Column(String, index=True)
-    template_note=  Column(Text)
+    Marketing adds a row once (Meta name + optional header image / body vars).
+    The bot looks templates up by `slug` (e.g. welcome, occasion, budget).
+    """
 
+    __tablename__ = "template_storage"
+
+    id = Column(Integer, primary_key=True, index=True)
+    slug = Column(String, unique=True, index=True, nullable=True)
+    template_name = Column(String, index=True, nullable=False)
+    template_note = Column(Text)
+    language_code = Column(String, default="en_US", nullable=False)
+    # Azure blob name for an uploaded header image (resolved to a SAS URL on send)
+    header_image_blob = Column(String, nullable=True)
+    # Optional public URL if they paste a link instead of uploading
+    header_media_url = Column(String, nullable=True)
+    header_media_type = Column(String, default="image", nullable=False)
+    # e.g. {"name": "{first_name}"} — placeholders filled from the lead at send time
+    body_parameters = Column(JSON, nullable=True)
+    use_named_parameters = Column(Boolean, default=True, nullable=False)
+    is_active = Column(Boolean, default=True, nullable=False)
 
     def __str__(self):
-        return self.template_name
+        return str(self.template_name or self.slug or f"Template #{self.id}")
 
 
 class Feedback(Base):

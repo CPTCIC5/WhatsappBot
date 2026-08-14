@@ -5,6 +5,7 @@ from starlette.responses import RedirectResponse
 from starlette.datastructures import UploadFile as StarletteUploadFile
 from wtforms import Form, TextAreaField, FileField, MultipleFileField, validators
 from markupsafe import Markup
+from html import escape
 import os
 import requests
 from dotenv import load_dotenv
@@ -36,6 +37,19 @@ def _product_thumbs(product):
         if url:
             tags.append(f'<img src="{url}" style="height:48px;border-radius:6px;margin-right:4px" />')
     return Markup("".join(tags)) if tags else "—"
+
+
+def _template_select_options(templates) -> str:
+    if not templates:
+        return '<option value="">No templates available</option>'
+    options = []
+    for t in templates:
+        note = f" — {escape(t.template_note)}" if t.template_note else ""
+        name = escape(t.template_name or "")
+        label = f"[{escape(t.slug)}] {name}" if t.slug else name
+        options.append(f'<option value="{t.id}">{label}{note}</option>')
+    return "".join(options)
+
 
 class MetalAdmin(ModelView, model=Metal):
     name = "Metal"
@@ -387,68 +401,43 @@ class GroupAdmin(ModelView, model=Group):
             request.session["_messages"] = [("error", "No groups selected")]
             return RedirectResponse(url=request.url_for("admin:list", identity=self.identity), status_code=302)
         
-        # Get template details from query params (if submitted)
-        template_name = request.query_params.get("template_name", "").strip()
-        language_code = request.query_params.get("language_code", "en_US").strip()
+        # Get template instance from query params (if submitted)
+        template_instance = request.query_params.get("template_instance", "").strip()
         
-        if template_name:
-            # Template was submitted, send it
-            # Get WhatsApp API credentials
-            token = os.getenv("ACCESS_TOKEN")
-            version = os.getenv("VERSION")
-            number_id = os.getenv("PHONE_NUMBER_ID")
-            
-            if not all([token, version, number_id]):
-                request.session["_messages"] = [("error", "WhatsApp API credentials not configured")]
-                return RedirectResponse(url=request.url_for("admin:list", identity=self.identity), status_code=302)
-            
+        if template_instance:
+            from send_msg import send_template_instance_to_group
+
             total_sent = 0
             total_failed = 0
-            
-            # Get database session
-            db = next(get_db())
-            
-            try:
-                # Send template to each group
-                for pk in pks:
-                    group = db.query(Group).filter(Group.id == int(pk)).first()
-                    if not group or not group.leads:
+            last_error = None
+            sent_name = template_instance
+
+            for pk in pks:
+                try:
+                    result = await send_template_instance_to_group(
+                        group_id=int(pk),
+                        instance=template_instance,
+                    )
+                    if result.get("error"):
+                        total_failed += 1
+                        last_error = result["error"]
                         continue
-                    
-                    url = f"https://graph.facebook.com/{version}/{number_id}/messages"
-                    headers = {
-                        "Authorization": f"Bearer {token}",
-                        "Content-type": "application/json"
-                    }
-                    
-                    # Send to each lead in the group
-                    for lead in group.leads:
-                        data = {
-                            "messaging_product": "whatsapp",
-                            "to": lead.phone,
-                            "type": "template",
-                            "template": {
-                                "name": template_name,
-                                "language": {
-                                    "code": language_code
-                                }
-                            }
-                        }
-                        
-                        try:
-                            response = requests.post(url=url, headers=headers, json=data)
-                            if response.status_code == 200:
-                                total_sent += 1
-                            else:
-                                total_failed += 1
-                        except Exception:
-                            total_failed += 1
-            finally:
-                db.close()
-            
+                    sent_name = result.get("template_name") or sent_name
+                    total_sent += result.get("successful", 0)
+                    total_failed += result.get("failed", 0)
+                except Exception as e:
+                    total_failed += 1
+                    last_error = str(e)
+
+            msg = (
+                f"Template '{sent_name}' sent to {total_sent} lead(s). "
+                f"{total_failed} failed."
+            )
+            if last_error and total_sent == 0:
+                msg = last_error
             request.session["_messages"] = [(
                 "success" if total_failed == 0 else "warning",
-                f"Template '{template_name}' sent to {total_sent} lead(s). {total_failed} failed."
+                msg,
             )]
             return RedirectResponse(url=request.url_for("admin:list", identity=self.identity), status_code=302)
         
@@ -465,19 +454,16 @@ class GroupAdmin(ModelView, model=Group):
                     group_names.append(group.name)
                     total_leads += len(group.leads) if group.leads else 0
             
-            # Fetch all templates from TemplateStorage
-            templates = db.query(TemplateStorage).all()
+            templates = (
+                db.query(TemplateStorage)
+                .filter(TemplateStorage.is_active.is_(True))
+                .order_by(TemplateStorage.slug, TemplateStorage.template_name)
+                .all()
+            )
         finally:
             db.close()
         
-        # Build template options for dropdown
-        template_options = ""
-        if templates:
-            for template in templates:
-                note = f" - {template.template_note}" if template.template_note else ""
-                template_options += f'<option value="{template.template_name}">{template.template_name}{note}</option>'
-        else:
-            template_options = '<option value="">No templates available</option>'
+        template_options = _template_select_options(templates)
         
         # Build the action URL with pks
         action_url = str(request.url)
@@ -502,18 +488,12 @@ class GroupAdmin(ModelView, model=Group):
                         <form method="GET" action="{action_url}">
                             <input type="hidden" name="pks" value="{','.join(pks)}">
                             <div class="mb-3">
-                                <label class="form-label">Template Name</label>
-                                <select name="template_name" class="form-select" required>
+                                <label class="form-label">Template</label>
+                                <select name="template_instance" class="form-select" required>
                                     <option value="">Select a template...</option>
                                     {template_options}
                                 </select>
-                                <small class="form-hint">Select a template from your WhatsApp Business account</small>
-                            </div>
-                            <div class="mb-3">
-                                <label class="form-label">Language Code</label>
-                                <input type="text" name="language_code" class="form-control" value="en_US" required 
-                                    placeholder="e.g., en_US, hi_IN">
-                                <small class="form-hint">Language code for the template (default: en_US)</small>
+                                <small class="form-hint">Uses the registered Templates row (header image, language, and body variables like name are filled per lead).</small>
                             </div>
                             <div class="d-flex gap-2">
                                 <button type="submit" class="btn btn-primary">Send Template</button>
@@ -551,51 +531,47 @@ class GroupAdmin(ModelView, model=Group):
             return RedirectResponse(url=request.url_for("admin:list", identity=self.identity), status_code=302)
         
         # Check if form was submitted
-        template_name = request.query_params.get("template_name", "").strip()
+        template_instance = request.query_params.get("template_instance", "").strip()
         
-        if template_name:
-            # Form submitted - process and send
-            from send_msg import send_template_to_group
+        if template_instance:
+            from send_msg import send_template_instance_to_group
             
-            language_code = request.query_params.get("language_code", "en_US").strip()
-            header_media_url = request.query_params.get("header_media_url", "").strip()
-            header_media_type = request.query_params.get("header_media_type", "image").strip()
-            
-            # Parse body parameters from form
+            header_media_url = request.query_params.get("header_media_url", "").strip() or None
             body_params_json = request.query_params.get("body_params", "").strip()
-            body_parameters = {}
+            body_parameters = None
             
             if body_params_json:
                 try:
-                    body_parameters = json.loads(body_params_json)
-                except:
+                    parsed = json.loads(body_params_json)
+                    if parsed:
+                        body_parameters = parsed
+                except Exception:
                     pass
             
             total_sent = 0
             total_failed = 0
+            sent_name = template_instance
             
-            # Send to each selected group
             for pk in pks:
                 try:
-                    result = send_template_to_group(
+                    result = await send_template_instance_to_group(
                         group_id=int(pk),
-                        template_name=template_name,
-                        language_code=language_code,
-                        body_parameters=body_parameters if body_parameters else None,
-                        header_media_url=header_media_url if header_media_url else None,
-                        header_media_type=header_media_type,
-                        use_named_parameters=True  # Use named parameters for WhatsApp templates
+                        instance=template_instance,
+                        body_parameters=body_parameters,
+                        header_media_url=header_media_url,
                     )
-                    
-                    if "error" not in result:
-                        total_sent += result.get("successful", 0)
-                        total_failed += result.get("failed", 0)
-                except Exception as e:
+                    if result.get("error"):
+                        total_failed += 1
+                        continue
+                    sent_name = result.get("template_name") or sent_name
+                    total_sent += result.get("successful", 0)
+                    total_failed += result.get("failed", 0)
+                except Exception:
                     total_failed += 1
             
             request.session["_messages"] = [(
                 "success" if total_failed == 0 else "warning",
-                f"Template sent to {total_sent} lead(s). {total_failed} failed."
+                f"Template '{sent_name}' sent to {total_sent} lead(s). {total_failed} failed."
             )]
             return RedirectResponse(url=request.url_for("admin:list", identity=self.identity), status_code=302)
         
@@ -612,18 +588,16 @@ class GroupAdmin(ModelView, model=Group):
                     group_names.append(group.name)
                     total_leads += len(group.leads) if group.leads else 0
             
-            templates = db.query(TemplateStorage).all()
+            templates = (
+                db.query(TemplateStorage)
+                .filter(TemplateStorage.is_active.is_(True))
+                .order_by(TemplateStorage.slug, TemplateStorage.template_name)
+                .all()
+            )
         finally:
             db.close()
         
-        # Build template options
-        template_options = ""
-        if templates:
-            for template in templates:
-                note = f" - {template.template_note}" if template.template_note else ""
-                template_options += f'<option value="{template.template_name}">{template.template_name}{note}</option>'
-        else:
-            template_options = '<option value="">No templates available</option>'
+        template_options = _template_select_options(templates)
         
         action_url = str(request.url)
         
@@ -663,36 +637,23 @@ class GroupAdmin(ModelView, model=Group):
                             <input type="hidden" name="body_params" id="bodyParamsInput">
                             
                             <div class="mb-3">
-                                <label class="form-label">Template Name</label>
-                                <select name="template_name" class="form-select" required>
+                                <label class="form-label">Template</label>
+                                <select name="template_instance" class="form-select" required>
                                     <option value="">Select a template...</option>
                                     {template_options}
                                 </select>
+                                <small class="form-hint">Registered Templates row. Leave the fields below empty to use its stored header image and body variables.</small>
                             </div>
                             
                             <div class="mb-3">
-                                <label class="form-label">Language Code</label>
-                                <input type="text" name="language_code" class="form-control" value="en_US" required>
-                            </div>
-                            
-                            <div class="mb-3">
-                                <label class="form-label">Header Image URL (Optional)</label>
+                                <label class="form-label">Header Image URL (Optional override)</label>
                                 <input type="url" name="header_media_url" class="form-control" 
                                     placeholder="https://example.com/image.jpg">
-                                <small class="form-hint">Leave empty if template has no header image</small>
+                                <small class="form-hint">Leave empty to use the image stored on the Templates row.</small>
                             </div>
                             
                             <div class="mb-3">
-                                <label class="form-label">Header Media Type</label>
-                                <select name="header_media_type" class="form-select">
-                                    <option value="image">Image</option>
-                                    <option value="video">Video</option>
-                                    <option value="document">Document</option>
-                                </select>
-                            </div>
-                            
-                            <div class="mb-3">
-                                <label class="form-label">Body Parameters</label>
+                                <label class="form-label">Body Parameters (Optional override)</label>
                                 <small class="form-hint d-block mb-2">
                                     Add key-value pairs for template variables. 
                                     Use "name" as key to auto-fetch from lead name.
@@ -762,16 +723,124 @@ class TemplateStorageAdmin(ModelView, model=TemplateStorage):
     name_plural = "Templates"
     icon = "fa-solid fa-file-lines"
 
-    column_list = [TemplateStorage.id, TemplateStorage.template_name, TemplateStorage.template_note]
-    column_searchable_list = [TemplateStorage.template_name]
-    column_sortable_list = [TemplateStorage.id, TemplateStorage.template_name]
+    column_list = [
+        TemplateStorage.id,
+        TemplateStorage.slug,
+        TemplateStorage.template_name,
+        TemplateStorage.language_code,
+        "header_image_blob",
+        TemplateStorage.is_active,
+        TemplateStorage.template_note,
+    ]
+    column_searchable_list = [
+        TemplateStorage.slug,
+        TemplateStorage.template_name,
+        TemplateStorage.template_note,
+    ]
+    column_sortable_list = [
+        TemplateStorage.id,
+        TemplateStorage.slug,
+        TemplateStorage.template_name,
+        TemplateStorage.is_active,
+    ]
 
-    form_columns = [TemplateStorage.template_name, TemplateStorage.template_note]
+    form_columns = [
+        TemplateStorage.slug,
+        TemplateStorage.template_name,
+        TemplateStorage.language_code,
+        TemplateStorage.header_image_blob,
+        TemplateStorage.header_media_url,
+        TemplateStorage.header_media_type,
+        TemplateStorage.body_parameters,
+        TemplateStorage.use_named_parameters,
+        TemplateStorage.is_active,
+        TemplateStorage.template_note,
+    ]
+    form_overrides = {"header_image_blob": FileField}
+
+    form_args = {
+        "slug": {
+            "description": "Internal key the bot uses (welcome, occasion, budget, trust, category). Keep it unique.",
+        },
+        "template_name": {
+            "description": "Exact template name from Meta WhatsApp Manager.",
+        },
+        "language_code": {
+            "description": "Language code approved on Meta, e.g. en_US.",
+        },
+        "header_image_blob": {
+            "validators": [],
+            "description": "Upload a header image (stored in Azure). Used when the Meta template has a dynamic media header.",
+        },
+        "header_media_url": {
+            "description": "Optional public image URL if you prefer not to upload. Ignored when a file is uploaded.",
+        },
+        "header_media_type": {
+            "description": "image, video, or document — must match the Meta template header.",
+        },
+        "body_parameters": {
+            "description": (
+                'JSON object of named body variables. Placeholders: '
+                '{first_name}, {name}, {phone}, {occasion}, {budget}, {category}. '
+                'Example: {"name": "{first_name}"}'
+            ),
+        },
+        "use_named_parameters": {
+            "description": "On = Meta named params (parameter_name). Off = positional {{1}}, {{2}}.",
+        },
+        "is_active": {
+            "description": "Inactive templates are ignored by the bot.",
+        },
+    }
 
     column_labels = {
-        "template_name": "Template Name",
-        "template_note": "Note"
+        "slug": "Slug",
+        "template_name": "Meta Name",
+        "template_note": "Note",
+        "language_code": "Language",
+        "header_image_blob": "Header Image",
+        "header_media_url": "Header URL",
+        "header_media_type": "Header Type",
+        "body_parameters": "Body Parameters",
+        "use_named_parameters": "Named Params",
+        "is_active": "Active",
     }
+    column_formatters = {
+        "header_image_blob": lambda m, a: _image_cell(
+            m.header_image_blob or m.header_media_url
+        ),
+        "is_active": lambda m, a: "✅" if m.is_active else "❌",
+    }
+    column_formatters_detail = {
+        "header_image_blob": lambda m, a: _image_cell(
+            m.header_image_blob or m.header_media_url
+        ),
+    }
+
+    async def on_model_change(self, data, model, is_created, request):
+        upload = data.get("header_image_blob")
+        if isinstance(upload, StarletteUploadFile) and upload.filename:
+            content = await upload.read()
+            old = getattr(model, "header_image_blob", None)
+            data["header_image_blob"] = azure_storage.upload_image(
+                content, upload.content_type, prefix="templates/"
+            )
+            if old and not is_created:
+                azure_storage.delete_blob(old)
+        else:
+            data["header_image_blob"] = (
+                None if is_created else getattr(model, "header_image_blob", None)
+            )
+
+        data["slug"] = (data.get("slug") or "").strip() or None
+        data["header_media_url"] = (data.get("header_media_url") or "").strip() or None
+        bp = data.get("body_parameters")
+        if bp in ("", {}, None):
+            data["body_parameters"] = None
+
+    async def on_model_delete(self, model, request):
+        if model.header_image_blob:
+            azure_storage.delete_blob(model.header_image_blob)
 
 
 class ReferralAdmin(ModelView, model=Referral):
